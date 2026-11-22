@@ -1,0 +1,38 @@
+name: ci
+
+# The JVM suites are plain Java with their own runner, so they need no SDK and no
+# device: they run on every push. The AAR build gets the SDK because JitPack
+# builds the same task on a tag, and a broken build there is invisible until a
+# consumer asks for the tag.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  jvm-suite:
+    name: terminal JVM suite
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: bash terminal/test.sh
+
+  library:
+    name: assemble AAR
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew --no-daemon assembleRelease

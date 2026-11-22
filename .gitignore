@@ -1,0 +1,7 @@
+.gradle/
+build/
+local.properties
+terminal/out/
+samples/out/
+*.apk
+*.idsig

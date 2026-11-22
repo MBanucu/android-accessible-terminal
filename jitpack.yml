@@ -1,0 +1,5 @@
+# AGP 8 needs JDK 17, and JitPack's default image is not guaranteed to have it.
+jdk:
+  - openjdk17
+install:
+  - ./gradlew publishToMavenLocal

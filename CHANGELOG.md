@@ -99,12 +99,16 @@ and this project adheres to
 ### Changed
 
 - The timing store — the ETA line, the per-check history and the regression gate —
-  is its own repository, `MBanucu/test-timings`, so a suite that is not this one
-  can use it. `test/timings.sh` runs the release pinned by version and sha256,
-  fetched once into `test/.deps/`; `TEST_TIMINGS_TOOL` runs a checkout instead.
-  The tool's own tests cover what this suite had no test for. Its estimate now
-  counts a check the history has not seen when the run passes `--order`, which
-  the copy kept here dropped from both the done count and the time left.
+  is its own project, `MBanucu/test-timings`, published to PyPI as
+  `test-timings`, so a suite that is not this one can `pip install` it.
+  `test/timings.sh` installs the pinned release into `test/.deps/venv` the first
+  time it is needed and runs its `test-timings` command from then on
+  (`TIMINGS_VERSION` pins the version, `TEST_TIMINGS_TOOL` runs a checkout
+  instead), so this suite uses the package the way any other project does and a
+  tool change has to be released before the suite can use it. The tool's own 22
+  unit tests cover what this suite had no test for. Its estimate now counts a
+  check the history has not seen when the run passes `--order`, which the copy
+  kept here dropped from both the done count and the time left.
 - The samples now depend on the published `screenstream` instead of compiling its
   submodule sources: `samples/build.sh` fetches `io.github.mbanucu:screenstream`'s
   AAR from Maven Central (`SCREENSTREAM_VERSION` pins the version), checks it

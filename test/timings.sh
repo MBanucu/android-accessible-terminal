@@ -1,50 +1,50 @@
 #!/usr/bin/env bash
-# The timing store is its own repository (MBanucu/test-timings); this runs the
-# version pinned below instead of a copy kept here. The download happens once,
-# into test/.deps/, and its sha256 is checked, so what the suite estimates and
-# gates with is exactly the release named here and not whatever main holds.
+# The timing store is its own project, published to PyPI as `test-timings`; this
+# installs the version pinned below into test/.deps/venv the first time it is
+# needed and runs that, so what estimates and gates the suite is a release rather
+# than a copy kept here, and the suite uses the package the way anyone else would.
 #
 #   bash test/timings.sh history
 #   bash test/timings.sh check --log samples/out/e2e-timings.log --run 1699999999
+#   TIMINGS_VERSION=0.3.0 bash test/timings.sh eta ...    # another release
 #
 # TEST_TIMINGS_TOOL runs a checkout instead, for when the tool itself is what is
 # being changed:
 #
-#   TEST_TIMINGS_TOOL=../../test-timings/timings.py bash test/timings.sh eta ...
+#   TEST_TIMINGS_TOOL=../../test-timings/test_timings.py bash test/timings.sh eta ...
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-version=0.1.0
-sha256=4155eb9d56196642b11fc18f9a92a11343ea91806f9e873142a3234838458e04
+version=${TIMINGS_VERSION:-0.2.0}
+deps=$here/.deps
+venv=$deps/venv
+command=$venv/bin/test-timings
 
-tool=${TEST_TIMINGS_TOOL:-$here/.deps/timings.py}
 # The tool defaults to .timings.db in the working directory; this suite's history
-# has always lived beside the wrapper, so it stays there whether it is run from
+# has always lived beside the wrapper, so it stays there whether this is run from
 # the repository root or from samples/ with --db left off.
 export TEST_TIMINGS_DB=${TEST_TIMINGS_DB:-$here/.timings.db}
 
-if [ ! -f "$tool" ]; then
-    mkdir -p "$here/.deps"
-    url=https://raw.githubusercontent.com/MBanucu/test-timings/v$version/timings.py
-    partial=$tool.part-$$
-    trap 'rm -f "$partial"' EXIT
-    if ! curl -fsSL --max-time 60 "$url" -o "$partial"; then
-        echo "timings: could not download $url" >&2
-        exit 1
-    fi
-    if command -v sha256sum >/dev/null; then
-        got=$(sha256sum "$partial" | cut -d' ' -f1)
-    else
-        got=$(python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$partial")
-    fi
-    if [ "$got" != "$sha256" ]; then
-        echo "timings: $url does not match the pinned sha256" >&2
-        echo "  expected $sha256" >&2
-        echo "  got      $got" >&2
-        exit 1
-    fi
-    mv "$partial" "$tool"
-    trap - EXIT
+if [ -n "${TEST_TIMINGS_TOOL:-}" ]; then
+    exec python3 "$TEST_TIMINGS_TOOL" "$@"
 fi
 
-exec python3 "$tool" "$@"
+if [ ! -x "$command" ] || [ "$(cat "$deps/version" 2>/dev/null || true)" != "$version" ]; then
+    mkdir -p "$deps"
+    if [ ! -x "$venv/bin/python" ]; then
+        if ! python3 -m venv "$venv"; then
+            echo "timings: could not create a virtualenv in $venv" >&2
+            exit 1
+        fi
+    fi
+    if ! "$venv/bin/pip" install --quiet --disable-pip-version-check --upgrade \
+            "test-timings==$version"; then
+        # No marker: the next call tries again instead of trusting a half install.
+        rm -f "$deps/version"
+        echo "timings: could not install test-timings==$version from PyPI" >&2
+        exit 1
+    fi
+    printf '%s\n' "$version" > "$deps/version"
+fi
+
+exec "$command" "$@"

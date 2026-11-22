@@ -228,7 +228,7 @@ An app in this process can attach without a socket: the pixel watch does, which 
 what `STREAM=1 bash samples/e2e.sh` turns on. Every pixel check then judges every
 changed frame instead of a screenshot every 333 ms, and the frame number and time
 in its answer are the source's — the same numbers a consumer on the socket sees,
-so `python3 test/capture.py frames --event pixel:tui-blink:pass` still points at
+so `bash test/harness.sh capture frames --event pixel:tui-blink:pass` still points at
 the right picture in the recording. It also judges the screen it starts on, once,
 from a screenshot: a stream says what changed, and a check that begins while the
 app is already drawn (a caret that does not blink) would otherwise have nothing to
@@ -267,7 +267,8 @@ bash samples/e2e.sh --restore        # put back what a dead run left changed
 The suite enables the probe service for the run and restores the accessibility
 settings afterwards, even when a check fails. It never changes the display size:
 a window is resized through the app itself. A dropped wireless-debugging session
-is not a failing check — `../test/adb-connect.py` asks mDNS for the current port.
+is not a failing check — `bash test/harness.sh connect` asks mDNS for the current
+port.
 
 ### The recording
 
@@ -278,10 +279,10 @@ the device (below), and a frame is pulled out of the video when somebody asks fo
 one.
 
 ```bash
-python3 test/capture.py show                      # every event, and its frame
-python3 test/capture.py frames --event check:tui-blink:end --out samples/out/frames
-python3 test/capture.py frames --at 12.5,40 --out samples/out/frames
-python3 test/capture.py frames --all --out samples/out/frames
+bash test/harness.sh capture show                      # every event, and its frame
+bash test/harness.sh capture frames --event check:tui-blink:end --out samples/out/frames
+bash test/harness.sh capture frames --at 12.5,40 --out samples/out/frames
+bash test/harness.sh capture frames --all --out samples/out/frames
 ```
 
 A failed check's frames are extracted at the end of the run by themselves, into
@@ -289,7 +290,7 @@ A failed check's frames are extracted at the end of the run by themselves, into
 
 The mapping is exact rather than approximate: `screenrecord` writes the device
 monotonic presentation time of every frame into a metadata track beside the video
-(`writeWinscopeMetadata`), and `test/capture.py` reads that track out of the MP4
+(`writeWinscopeMetadata`), and `capture.py` reads that track out of the MP4
 and pairs it with the container's pts. An event becomes the last frame presented
 at or before it, which is the picture that was on screen. Nothing is assumed
 about the frame rate: `screenrecord` writes a frame only when the screen changes,

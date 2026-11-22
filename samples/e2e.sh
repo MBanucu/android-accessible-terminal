@@ -17,9 +17,9 @@
 #
 # The run is recorded unless --no-record is given: one video for the whole suite
 # in samples/out/capture/, an event per check beside it, and no screenshot taken
-# during the run at all. `python3 test/capture.py show` lists the moments and
-# `frames` extracts one when asked; a failed check's frames are extracted at the
-# end, into samples/out/frames/.
+# during the run at all. `bash test/harness.sh capture show` lists the moments
+# and `frames` extracts one when asked; a failed check's frames are extracted
+# at the end, into samples/out/frames/.
 #
 # The probe service is enabled for the run, and the accessibility settings are
 # put back the way they were found - even when a check fails or the run is
@@ -43,7 +43,7 @@ QUIET=0
 ONLY=""
 # The run is recorded from the first check to the last unless --no-record is
 # given: one video, plus an event per check, and no screenshot taken during the
-# run at all. test/capture.py maps an event to the frame that was on screen then
+# run at all. `capture.py` maps an event to the frame that was on screen then
 # and extracts it when somebody asks for it.
 RECORD=1
 # STREAM=1 (or --stream) starts the screenstream module's source once and lets
@@ -93,12 +93,12 @@ device() { $ADB "$@"; }
 
 # --- the recording ------------------------------------------------------------
 # One video for the run and an event beside every moment worth seeing again. An
-# event costs no adb call: it is written on this side, and test/capture.py pairs
+# event costs no adb call: it is written on this side, and `capture.py` pairs
 # this machine's clock with the device's at the start and at the end, so a moment
 # becomes the frame that was on screen at that moment. No screenshot is taken
-# while the checks run; `python3 test/capture.py frames` takes one out of the
-# recording when somebody asks for it.
-capture_py() { python3 "$here/../test/capture.py" "$@" --dir "$CAPTURE_DIR"; }
+# while the checks run; `bash test/harness.sh capture frames` takes one out of
+# the recording when somebody asks for it.
+capture_py() { bash "$here/../test/harness.sh" capture "$@" --dir "$CAPTURE_DIR"; }
 mark() { [ "$RECORD" = 1 ] || return 0; capture_py event "$@" >/dev/null 2>&1 || true; }
 
 start_recording() {
@@ -142,21 +142,21 @@ stop_recording() {
     done
     [ -n "$FAILED_CHECKS" ] \
         && say "  frames of the failures: $here/out/frames" \
-        && say "  every moment: python3 test/capture.py show --dir $CAPTURE_DIR"
+        && say "  every moment: bash test/harness.sh capture show --dir $CAPTURE_DIR"
     RECORD=0
 }
 
 # A dropped wireless session is not a failing check: ask mDNS for the current
-# port before deciding the suite cannot run. The watcher (test/adb-watch.sh)
-# normally keeps this from being needed, but a suite started by hand should not
-# require it.
+# port before deciding the suite cannot run. The watcher (`bash test/harness.sh
+# watch`) normally keeps this from being needed, but a suite started by hand
+# should not require it.
 ensure_device() {
     device get-state >/dev/null 2>&1 && return 0
     local connector
-    connector=$(cd "$here/.." && pwd)/test/adb-connect.py
+    connector=$(cd "$here/.." && pwd)/test/harness.sh
     [ -f "$connector" ] || return 1
     say "no device; asking mDNS for the wireless-debugging port"
-    python3 "$connector" 2>&1 | sed 's/^/  /'
+    bash "$connector" connect 2>&1 | sed 's/^/  /'
     device get-state >/dev/null 2>&1
 }
 

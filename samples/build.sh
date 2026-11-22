@@ -229,15 +229,15 @@ echo "built $here/out/$app.apk ($(wc -c < "$here/out/$app.apk") bytes)"
 # command fail with "no devices"; this never fails the build, and ADB_CONNECT=0
 # skips it for an offline build.
 if [ "${ADB_CONNECT:-1}" != 0 ] && command -v adb >/dev/null; then
-    watcher=$root/test/adb-watch.sh
-    if [ -x "$watcher" ] && ! bash "$watcher" --status >/dev/null 2>&1; then
+    watcher=$root/test/harness.sh
+    if [ -x "$watcher" ] && ! bash "$watcher" watch --status >/dev/null 2>&1; then
         echo "== $app: starting the adb port watcher"
-        setsid nohup bash "$watcher" >/dev/null 2>&1 < /dev/null &
+        setsid nohup bash "$watcher" watch >/dev/null 2>&1 < /dev/null &
     fi
     if adb devices 2>/dev/null | awk 'NR > 1 && $2 == "device" { found = 1 } END { exit !found }'; then
         echo "== $app: adb device already connected"
     else
         echo "== $app: looking up the wireless-debugging port"
-        python3 "$root/test/adb-connect.py" --timeout 4 2>&1 | sed 's/^/   /' || true
+        bash "$root/test/harness.sh" connect --timeout 4 2>&1 | sed 's/^/   /' || true
     fi
 fi

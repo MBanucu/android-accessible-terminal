@@ -98,6 +98,19 @@ and this project adheres to
 
 ### Changed
 
+- The tools that drive the device — `adb-connect.py` (the mDNS lookup for the
+  wireless-debugging port), `adb-watch.sh` (the loop that reconnects) and
+  `capture.py` (the recording and the frame for an event) — are their own
+  repository, [`adb-harness`](https://github.com/MBanucu/adb-harness), so a
+  project that tests something else on a phone can use them without taking this
+  suite along. `test/harness.sh` fetches the release pinned by version and
+  sha256 into `test/.deps/harness/` and runs it as `capture`, `connect` or
+  `watch` (`HARNESS_VERSION` pins the version, `HARNESS_SRC` runs a checkout
+  instead). The tools behave as they did here: the watcher's pid and log stay in
+  `test/out/` through `ADB_WATCH_OUT`. The names call sites use are
+  one step longer for it — `bash test/harness.sh capture show` rather than
+  `python3 test/capture.py show` — and there is no other change: a full recorded
+  run passes, mapping all 52 of its events to frames.
 - The timing store — the ETA line, the per-check history and the regression gate —
   is its own project, `MBanucu/test-timings`, published to PyPI as
   `test-timings`, so a suite that is not this one can `pip install` it.

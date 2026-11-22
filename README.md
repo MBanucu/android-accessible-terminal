@@ -63,7 +63,10 @@ when it is not. A sample copy is in
 no Gradle, no device.
 
 `bash samples/build.sh all` builds both demo apps with the SDK's tools and no
-Gradle, and `bash samples/e2e.sh` drives them on a connected device.
+Gradle, and `bash samples/e2e.sh` drives them on a connected device. The first
+sample build needs the network once: the screen stream is a dependency taken from
+Maven Central (`io.github.mbanucu:screenstream`, pinned by `SCREENSTREAM_VERSION`)
+and cached under `samples/out/m2`, not a directory in this repository.
 
 The Gradle build needs an Android SDK (`ANDROID_HOME`, `ANDROID_SDK_ROOT` or
 `sdk.dir` in `local.properties`) and JDK 17. On an aarch64 host, such as Termux,
@@ -80,8 +83,8 @@ needs neither. `assembleRelease` writes the unsigned AAR to
 `build/outputs/aar/`; `nmcpZipAggregation` writes the signed-for-release bundle
 only when `SIGNING_KEY` is set, so a local build needs no secrets.
 
-Alternatively, compile the sources directly, which is what the sample apps do
-and what works on an aarch64 host where Gradle's `aapt2` has no build:
+The terminal view has no release, so the samples still compile its sources
+directly, which also works on an aarch64 host where Gradle's `aapt2` has no build:
 
 ```kotlin
 android {

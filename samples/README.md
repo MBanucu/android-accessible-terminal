@@ -175,10 +175,16 @@ frames instead, which is every change rather than three a second; see below.
 ### The screen stream
 
 The stream is not part of this app: it is its own repository,
-[`screenstream`](https://github.com/MBanucu/screenstream), checked in here as a
-submodule at `screenstream/`, and `samples/build.sh` compiles its source set into
-any sample that names it, the way a Gradle app would get it from the AAR. The
-module's `ScreenStreamActivity` asks the system for the display once, and its
+[`screenstream`](https://github.com/MBanucu/screenstream), released to Maven
+Central and taken from there. `samples/build.sh` fetches the published AAR —
+`SCREENSTREAM_VERSION` pins the version, the `classes.jar` inside it goes on the
+classpath and to `d8`, and the download is checked against the `.sha1` the
+repository serves. So a sample builds against what a dependency would actually
+get, and a change to the library has to be published before a sample can use it.
+(The repository used to be checked in here as a submodule; once the build took the
+artifact, that second copy was a pin that could disagree with the version being
+compiled, so it is gone.) The library's `ScreenStreamActivity` asks the system for
+the display once, and its
 `ScreenStream` service serves it as a raw stream with no encoder and no container
 in the way: RGBA_8888 frames straight from an `ImageReader`, numbered, timed on the
 device, and sent only when the screen changes. Anything on the phone attaches to
@@ -192,8 +198,9 @@ adb shell am start -n io.github.mbanucu.samples.a11yprobe/io.github.mbanucu.scre
 # with the probe enabled, start the same activity and it clicks "Start".
 
 adb forward tcp:7100 tcp:7100                 # for anything on the other end
-python3 screenstream/client/stream.py --seconds 5            # frames, their shape
-python3 screenstream/client/stream.py --frames 3 --png samples/out/stream
+# The client is the library's own reference consumer, in its repository:
+python3 ../screenstream/client/stream.py --seconds 5          # frames, their shape
+python3 ../screenstream/client/stream.py --frames 3 --png samples/out/stream
 ```
 
 A frame is a 36-byte big-endian header — `RAW1`, width, height, row stride,

@@ -17,6 +17,12 @@
 #   jni/*.c               optional native sources, built into one library named
 #                         after the app directory (native-terminal ->
 #                         libnative_terminal.so, so System.loadLibrary("native_terminal"))
+#
+# A dependency that is published is taken from Maven Central, the way a Gradle app
+# would take it: the screenstream AAR, fetched once into samples/out/m2 and checked
+# against the .sha1 the repository serves. SCREENSTREAM_VERSION pins which version;
+# a change to the library has to be published before a sample can build against it.
+# The terminal module has no release, so its sources are still compiled in.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -40,9 +46,56 @@ api=35
 android_jar=$sdk/platforms/android-$api/android.jar
 build_tools=$sdk/build-tools/35.0.0
 [ -f "$android_jar" ] || { echo "no $android_jar" >&2; exit 1; }
-for tool in aapt2 d8 zipalign apksigner javac clang python3; do
+for tool in aapt2 d8 zipalign apksigner javac clang python3 curl sha1sum; do
     command -v "$tool" >/dev/null || { echo "missing $tool" >&2; exit 1; }
 done
+
+# --- published dependencies ----------------------------------------------------
+# An AAR is a zip with classes.jar inside; without Gradle the two steps it would
+# do are: put classes.jar on the compile classpath, and hand it to d8. The sha1
+# check is not ceremony: the build is taking code from the network instead of from
+# this checkout, so it verifies it got the artifact the repository advertises.
+fetch_aar() {
+    local group=$1 artifact=$2 version=$3
+    local dir=$here/out/m2/${group//.//}/$artifact/$version
+    local jar=$dir/$artifact-$version-classes.jar
+    if [ ! -f "$jar" ]; then
+        local base=https://repo1.maven.org/maven2/${group//.//}/$artifact/$version
+        echo "== $artifact $version: Maven Central ==" >&2
+        mkdir -p "$dir"
+        # Every step is checked rather than trusted to `set -e`: a command
+        # substitution runs with errexit cleared, so inside one a failed download
+        # would fall through and leave this function returning a path to nothing.
+        if ! curl --fail --silent --show-error --location \
+                -o "$dir/$artifact-$version.aar" "$base/$artifact-$version.aar"; then
+            echo "$artifact $version is not at $base" >&2
+            rmdir "$dir" 2>/dev/null
+            return 1
+        fi
+        local want got
+        if ! want=$(curl --fail --silent --show-error --location "$base/$artifact-$version.aar.sha1"); then
+            echo "$artifact-$version.aar: the repository publishes no sha1" >&2
+            return 1
+        fi
+        got=$(sha1sum "$dir/$artifact-$version.aar" | cut -d' ' -f1)
+        if [ "$want" != "$got" ]; then
+            echo "$artifact-$version.aar: sha1 $got, repository says $want" >&2
+            rm -f "$dir/$artifact-$version.aar"
+            return 1
+        fi
+        if ! python3 - "$dir/$artifact-$version.aar" "$jar" <<'EOF'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as aar, open(sys.argv[2], 'wb') as jar:
+    jar.write(aar.read('classes.jar'))
+EOF
+        then
+            echo "$artifact-$version.aar: no classes.jar inside" >&2
+            rm -f "$jar"
+            return 1
+        fi
+    fi
+    printf '%s' "$jar"
+}
 
 app=${1:-}
 case "$app" in
@@ -88,21 +141,27 @@ aapt2 link -o "$work/base.apk" \
 
 # --- java ----------------------------------------------------------------------
 echo "== $app: javac =="
-# The terminal view and the screen stream are modules, not part of any one app:
-# their source sets are compiled into every app that names them, the way a library
-# module's source set would be. The whole app directory is searched, manifest
-# included, so an app that is only a manifest (screen-stream) picks up the module
-# its components come from. Those are the modules a Gradle app would get from an
-# AAR; here the sources are the artifact.
+# The whole app directory is searched, manifest included, so an app that is only a
+# manifest picks up the dependency its components come from. The terminal module is
+# still a source set because it has no release; the screen stream is an artifact.
 modules=()
 if grep -rq 'io\.github\.mbanucu\.terminal' "$dir" 2>/dev/null; then
     modules+=("$root/terminal/src/main/java")
 fi
+classpath=$android_jar
+jars=()
 if grep -rq 'io\.github\.mbanucu\.screenstream' "$dir" 2>/dev/null; then
-    modules+=("$root/screenstream/src/main/java")
+    # A fetch that fails must stop the build here: without this the script goes on
+    # to javac with the dependency missing and reports its symbols as errors.
+    if ! stream=$(fetch_aar io.github.mbanucu screenstream "${SCREENSTREAM_VERSION:-0.1.0}"); then
+        echo "could not get screenstream ${SCREENSTREAM_VERSION:-0.1.0} from Maven Central" >&2
+        exit 1
+    fi
+    jars+=("$stream")
+    classpath=$classpath:$stream
 fi
 mapfile -t sources < <(find "$dir/src" "$work/gen" ${modules[@]+"${modules[@]}"} -name '*.java' 2>/dev/null)
-javac -nowarn --release 17 -classpath "$android_jar" -d "$work/classes" "${sources[@]}"
+javac -nowarn --release 17 -classpath "$classpath" -d "$work/classes" "${sources[@]}"
 
 python3 - "$work/classes" "$work/classes.jar" <<'EOF'
 import os, sys, zipfile
@@ -115,7 +174,7 @@ with zipfile.ZipFile(jar, 'w', zipfile.ZIP_DEFLATED) as z:
 EOF
 
 echo "== $app: d8 =="
-d8 --lib "$android_jar" --min-api 24 --output "$work/dex" "$work/classes.jar"
+d8 --lib "$android_jar" --min-api 24 --output "$work/dex" "$work/classes.jar" ${jars[@]+"${jars[@]}"}
 
 # --- native --------------------------------------------------------------------
 libs=()
@@ -141,7 +200,11 @@ base, dexdir, out, libroot, app = sys.argv[1:6]
 with zipfile.ZipFile(base) as src, zipfile.ZipFile(out, 'w') as dst:
     for item in src.infolist():
         dst.writestr(item, src.read(item.filename))
-    dst.write(os.path.join(dexdir, 'classes.dex'), 'classes.dex')
+    # d8 splits into classes.dex, classes2.dex, ... when one jar plus a dependency
+    # does not fit in a single dex; each one is a file the loader looks for.
+    for name in sorted(os.listdir(dexdir)):
+        if name.endswith('.dex'):
+            dst.write(os.path.join(dexdir, name), name)
     if os.path.isdir(libroot):
         for base_dir, _, files in os.walk(libroot):
             for name in files:

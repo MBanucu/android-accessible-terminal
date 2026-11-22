@@ -2,10 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="io.github.mbanucu.samples.a11yprobe">
 
-    <!-- The screen stream is a library this app depends on (the screenstream
-         repository, compiled in as a source set by samples/build.sh). Its own
-         manifest declares these permissions, so a Gradle app gets them from the
-         AAR; here the sources are the dependency, so they are declared again. -->
+    <!-- The screen stream is a library this app depends on: the AAR published to
+         Maven Central, which samples/build.sh fetches by version. Its own manifest
+         declares these permissions and its two components, so a Gradle app gets
+         them by merging; this build has no manifest merger, so they are declared
+         here as well. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />

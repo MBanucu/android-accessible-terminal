@@ -10,9 +10,14 @@ and this project adheres to
 
 ### Added
 
+- `screenstream` 0.1.0 is published to Maven Central as
+  `io.github.mbanucu:screenstream` — the AAR, POM, sources and javadoc, signed,
+  through the repository's own `publish.sh` (build, sign, checksum, bundle,
+  upload, and `--status`/`--publish` for the deployment). The POM carries no Gradle
+  module metadata, so a Gradle consumer needs `@aar` on the coordinate.
 - A raw screen stream from the phone itself, in its own repository:
-  [`screenstream`](https://github.com/MBanucu/screenstream), a submodule at
-  `screenstream/`. It ships as an app (`bash build.sh apk`) and as a library
+  [`screenstream`](https://github.com/MBanucu/screenstream). It ships as an app
+  (`bash build.sh apk`) and as a library
   (AAR, jar, sources and POM, for an app or a test framework to depend on).
   `ScreenStreamActivity` asks for the display once and `ScreenStream` serves it as
   RGBA_8888 frames straight from an `ImageReader` - no encoder, no container - on
@@ -24,7 +29,7 @@ and this project adheres to
   `adb shell appops set <pkg> PROJECT_MEDIA allow`, which starts the capture with
   no dialog at all, or from an accessibility service clicking the system dialog as
   a screen reader would (`ScreenStream.setDialogClicker`).
-  `screenstream/client/stream.py` attaches, prints the shape of the stream and
+  The library's `client/stream.py` attaches, prints the shape of the stream and
   keeps frames when asked; a frame taken this way matched `screencap` pixel for
   pixel.
 - `VIDEO=1 STREAM=1 bash samples/e2e.sh` (`--video`) records the run from the
@@ -90,6 +95,17 @@ and this project adheres to
 
 ### Changed
 
+- The samples now depend on the published `screenstream` instead of compiling its
+  submodule sources: `samples/build.sh` fetches `io.github.mbanucu:screenstream`'s
+  AAR from Maven Central (`SCREENSTREAM_VERSION` pins the version), checks it
+  against the `.sha1` the repository serves, and puts its `classes.jar` on the
+  javac classpath and through `d8`. So a sample builds against what a real consumer
+  gets, and a library change has to be published before a sample can use it. The
+  e2e subset passes against the released 0.1.0.
+- `screenstream` also has a Gradle build (`gradle :assembleRelease`) that works on
+  this device with Gradle 9.9.2 and AGP 9.5.2; `build.sh` remains the build with
+  no downloads.
+
 - The e2e suite takes about a third less time: 194 s down to 121 s for the 23
   checks. The startup gate reads the probe's window count instead of dumping
   every window tree (32 s of the run), a launch is one adb call instead of
@@ -106,6 +122,13 @@ and this project adheres to
   waiting for events that arrive when they arrive.
 
 ### Removed
+
+- The `screenstream` submodule. Its sources were what the samples compiled before
+  they took the published AAR; after that it was a second pin that could disagree
+  with the version actually being compiled, it made `git status` dirty whenever the
+  checkout had work, and it required `git submodule update --init` for something no
+  build read. The library stays its own repository; a checkout beside this one is
+  what the client examples in `samples/README.md` refer to (`../screenstream`).
 
 - The `opencode` check, which needed opencode installed and tested that program
   rather than the view. The miniature pages check the same bytes.

@@ -77,7 +77,11 @@ START=$SECONDS
 # install and the device setup, not only the checks written down so far.
 START_EPOCH=$(date +%s)
 CHECKS_RUN=0
-CHECKS="pty pty-flags pty-raw tty-tabs tty-scroll tty-edit tty-typing tui-fast-typing tui-fast-typing-load cursor cursor-escapes colour tui tui-echo tui-caret tui-blink tui-bg tui-symbols tui-modes resize rows session session-resize"
+# In the order the `check` calls near the end of this file run them, because
+# test/timings.sh takes this list as the run's order and names the check in
+# progress from it; a name that is out of place makes the estimate claim the run
+# is somewhere it is not.
+CHECKS="cursor cursor-escapes colour tui tui-echo tui-caret tui-blink tui-bg tui-symbols tui-modes pty pty-flags pty-raw tty-tabs tty-scroll tty-edit tty-typing tui-fast-typing tui-fast-typing-load resize rows session session-resize"
 FAIL=0
 FAIL_COUNT=0
 
@@ -1853,7 +1857,7 @@ wanted() {
 eta_line() {
     [ -n "$ONLY" ] && return 0
     local line
-    line=$(python3 "$here/../test/timings.py" eta --class samples.e2e \
+    line=$(bash "$here/../test/timings.sh" eta --class samples.e2e \
         --run "$RUN_STARTED" --log "$TIMING_LOG" --db "$here/../test/.timings.db" \
         --order "$CHECKS" --started "$START_EPOCH" 2>/dev/null) || return 0
     case "$line" in
@@ -1880,7 +1884,7 @@ check() {
     reap_sessions
     seconds=$((SECONDS - started))
     say "  ($name: ${seconds}s)"
-    # The log line test/timings.py already knows: class#test duration outcome.
+    # The log line the timing store already knows: class#test duration outcome.
     printf 'timing: samples.e2e#%s %dms %s\n' "$name" "$((seconds * 1000))" \
         "$([ "$FAIL_COUNT" = "$before" ] && echo passed || echo failed)" >> "$TIMING_LOG"
     eta_line
@@ -1889,7 +1893,7 @@ check() {
 # Records this run in the suite's existing timing database.
 record_run() {
     [ -s "$TIMING_LOG" ] || return 0
-    python3 "$here/../test/timings.py" record --log "$TIMING_LOG" \
+    bash "$here/../test/timings.sh" record --log "$TIMING_LOG" \
         --run "$RUN_STARTED" --db "$here/../test/.timings.db" >/dev/null 2>&1 \
         || say "WARNING: could not record this run in test/.timings.db"
 }
@@ -1973,7 +1977,7 @@ stop_video
 # a partial run is compared with the same checks in full runs otherwise, and
 # the install shapes the first check of a subset differently.
 if [ "$FAIL" = 0 ] && [ -z "$ONLY" ]; then
-    if ! gate=$(python3 "$here/../test/timings.py" check --class samples.e2e \
+    if ! gate=$(bash "$here/../test/timings.sh" check --class samples.e2e \
             --log "$TIMING_LOG" --run "$RUN_STARTED" \
             --db "$here/../test/.timings.db" 2>&1); then
         printf '%s\n' "$gate" | sed 's/^/  /'

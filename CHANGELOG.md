@@ -85,19 +85,26 @@ and this project adheres to
   121 s suite, so `--no-record` runs without it.
 - A regression gate at the end of a full run: every check has to finish within
   20% and two seconds of the median of its last five runs, and a check with a
-  median under three seconds is not judged. `test/timings.py check` does the
+  median under three seconds is not judged. `bash test/timings.sh check` does the
   comparing; the suite exits 1 and names the check, its time and the allowance
   it broke. The CI workflow grows an `e2e` job for it on a self-hosted
   `android-device` runner, off unless the repository sets `E2E_DEVICE=true`,
   because no hosted runner has a phone, an accessibility service and Termux.
 - A progress and ETA line after every check: how many checks are done, what the
   run has spent, what is left and when it should finish, from
-  `test/timings.py eta`. The estimate now counts the run's wall clock (so the
+  `test/timings.sh eta`. The estimate now counts the run's wall clock (so the
   install it already paid for is included) and takes the median of each
   check's last few runs, so it follows a suite that got faster.
 
 ### Changed
 
+- The timing store — the ETA line, the per-check history and the regression gate —
+  is its own repository, `MBanucu/test-timings`, so a suite that is not this one
+  can use it. `test/timings.sh` runs the release pinned by version and sha256,
+  fetched once into `test/.deps/`; `TEST_TIMINGS_TOOL` runs a checkout instead.
+  The tool's own tests cover what this suite had no test for. Its estimate now
+  counts a check the history has not seen when the run passes `--order`, which
+  the copy kept here dropped from both the done count and the time left.
 - The samples now depend on the published `screenstream` instead of compiling its
   submodule sources: `samples/build.sh` fetches `io.github.mbanucu:screenstream`'s
   AAR from Maven Central (`SCREENSTREAM_VERSION` pins the version), checks it

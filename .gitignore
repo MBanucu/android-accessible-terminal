@@ -10,3 +10,6 @@ samples/out/
 # ran it.
 test/.timings.db
 test/out/
+
+# The pinned timing tool, fetched by test/timings.sh on first use.
+test/.deps/

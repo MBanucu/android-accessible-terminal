@@ -326,7 +326,7 @@ A full run prints a progress line with an estimate after every check:
 ```
 
 and ends with the regression gate: every check has to finish within 20% and two
-seconds of the median of its last five runs (`python3 test/timings.py check`). A
+seconds of the median of its last five runs (`bash test/timings.sh check`). A
 shorter median than three seconds is not judged, because a two-second check on a
 phone moves by more than 20% on its own. The gate is why a run can fail with
 every `ok` line in place — that is a slowdown, not a broken check, and the line

@@ -18,6 +18,9 @@ and this project adheres to
 - A curses fast-typing check: three lines submitted back to back into a curses
   form, asserted on order, duplicates, every character and the number of keys
   the program consumed.
+- The same three lines into a curses form that repaints ten times a second, so
+  fast typing is checked while output is arriving rather than only into a
+  program sitting in `getch`.
 
 ### Removed
 

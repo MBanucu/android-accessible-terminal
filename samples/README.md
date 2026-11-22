@@ -153,6 +153,7 @@ Each takes an extra on the launch intent:
 | `--ez edit true` | `IL`, `DL`, `ICH` and `DCH`, with all four results on screen together |
 | `--ez typing true` | every line it reads, numbered and measured, for the fast-typing check |
 | `--ez tuiTyping true` | a curses form that logs each submitted line with its length and counts every key it consumed |
+| `--ez tuiTypingLoad true` | the same form, repainting ten times a second, for typing that overlaps output |
 
 ## a11y-probe — the service the suite acts with
 

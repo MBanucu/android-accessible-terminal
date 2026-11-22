@@ -182,6 +182,8 @@ public final class MainActivity extends Activity {
                 && getIntent().getBooleanExtra("typing", false);
         boolean tuiTyping = getIntent() != null
                 && getIntent().getBooleanExtra("tuiTyping", false);
+        boolean tuiTypingLoad = getIntent() != null
+                && getIntent().getBooleanExtra("tuiTypingLoad", false);
         boolean background = getIntent() != null
                 && getIntent().getBooleanExtra("background", false);
         boolean symbols = getIntent() != null
@@ -233,6 +235,8 @@ public final class MainActivity extends Activity {
             startTui("tty-edit.py", "tty-edit");
         } else if (typing) {
             startTui("tty-typing.py", "tty-typing");
+        } else if (tuiTypingLoad) {
+            startTui("tui-typing-load.py", "tui-typing-load");
         } else if (tuiTyping) {
             startTui("tui-typing.py", "tui-typing");
         } else if (echo) {

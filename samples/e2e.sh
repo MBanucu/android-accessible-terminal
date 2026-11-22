@@ -39,7 +39,7 @@ esac
 ONLY=${ONLY//,/ }
 START=$SECONDS
 CHECKS_RUN=0
-CHECKS="pty pty-flags pty-raw tty-tabs tty-scroll tty-edit tty-typing tui-fast-typing cursor cursor-escapes colour tui tui-echo tui-caret tui-blink tui-bg tui-symbols tui-modes resize rows session session-resize"
+CHECKS="pty pty-flags pty-raw tty-tabs tty-scroll tty-edit tty-typing tui-fast-typing tui-fast-typing-load cursor cursor-escapes colour tui tui-echo tui-caret tui-blink tui-bg tui-symbols tui-modes resize rows session session-resize"
 FAIL=0
 FAIL_COUNT=0
 
@@ -1488,6 +1488,52 @@ test_curses_fast_typing() {
         || bad "curses typing: $keys keys for $expected characters and Enters"
 }
 
+# The same three lines into a program that never stops repainting. Curses reads
+# its keys between frames there, and each frame hands bytes to the view, so this
+# is where a keystroke is easiest to drop or to overtake the one before it.
+test_curses_fast_typing_under_load() {
+    launch --ez tuiTypingLoad true
+    if ! await "tui-typing-load:started" 30; then
+        bad "curses typing under load: the TUI was never sent to the session"
+        return
+    fi
+    if ! await "CURSES-LOAD-TYPING" 25; then
+        bad "curses typing under load: the TUI never drew"
+        return
+    fi
+    local first="THE-QUICK-BROWN-FOX-0123456789-JUMPS-OVER-THE-LAZY-DOG"
+    local second="PACK-MY-BOX-WITH-FIVE-DOZEN-LIQUOR-JUGS-9876543210"
+    local third="done"
+    submit_text "$first"
+    submit_text "$second"
+    submit_text "$third"
+    if ! await "got 3 " 30; then
+        bad "curses typing under load: not all three lines reached the TUI"
+        return
+    fi
+    sleep 2
+    local screen expected keys frames
+    screen=$(last_screen)
+    printf '%s\n' "$screen" | grep -qxF "got 1 ${#first} $first" \
+        && ok "curses typing under load: the first line arrived whole, in order" \
+        || bad "curses typing under load: the first line is not the one sent"
+    printf '%s\n' "$screen" | grep -qxF "got 2 ${#second} $second" \
+        && ok "curses typing under load: the second line arrived whole, in order" \
+        || bad "curses typing under load: the second line is not the one sent"
+    printf '%s\n' "$screen" | grep -qxF "got 3 ${#third} $third" \
+        && ok "curses typing under load: the short line after them arrived whole" \
+        || bad "curses typing under load: the short line after them did not"
+    expected=$(( ${#first} + ${#second} + ${#third} + 3 ))
+    keys=$(printf '%s\n' "$screen" | sed -n 's/^keys: //p' | tail -1)
+    [ "${keys:-0}" = "$expected" ] \
+        && ok "curses typing under load: $keys keys, one per character and per Enter" \
+        || bad "curses typing under load: $keys keys for $expected characters and Enters"
+    frames=$(printf '%s\n' "$screen" | sed -n 's/^frame: //p' | tail -1)
+    [ "${frames:-0}" -gt 2 ] \
+        && ok "curses typing under load: it kept repainting ($frames frames) while typed into" \
+        || bad "curses typing under load: it stopped repainting ($frames) while typed into"
+}
+
 # --- run ----------------------------------------------------------------------
 
 # One check by name, or all of them: the install and the device state are the
@@ -1578,6 +1624,7 @@ check tty-scroll test_scroll_region
 check tty-edit test_insert_and_delete
 check tty-typing test_fast_typing_keeps_every_letter
 check tui-fast-typing test_curses_fast_typing
+check tui-fast-typing-load test_curses_fast_typing_under_load
 check resize test_grid_resize_reaches_the_pty
 check rows test_rows_and_events
 check session test_service_types_into_a_termux_session

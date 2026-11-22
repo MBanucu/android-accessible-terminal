@@ -33,6 +33,16 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
       - uses: gradle/actions/setup-gradle@v4
+      # The runner image ships the SDK; install the platform and build tools the
+      # library compiles against. sdkmanager directly, not a setup action: the
+      # one that used to be here ran `sdkmanager tools`, which current
+      # cmdline-tools no longer provide, and failed before Gradle started.
+      - name: Android SDK
+        run: |
+          sdk="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          manager=$(command -v sdkmanager || echo "$sdk/cmdline-tools/latest/bin/sdkmanager")
+          yes | "$manager" --licenses >/dev/null 2>&1 || true
+          "$manager" "platforms;android-35" "build-tools;35.0.0" >/dev/null
+          echo "sdk=$sdk" >>"$GITHUB_ENV"
       - run: ./gradlew --no-daemon assembleRelease

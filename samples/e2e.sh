@@ -10,7 +10,14 @@
 #   bash samples/e2e.sh --only pty,tui-bg # several checks, one install
 #   bash samples/e2e.sh --list            # the check names
 #   bash samples/e2e.sh --quiet           # failures and the summary only
+#   bash samples/e2e.sh --no-record       # the fast path, no screen recording
 #   bash samples/e2e.sh --restore         # put back what a dead run left changed
+#
+# The run is recorded unless --no-record is given: one video for the whole suite
+# in samples/out/capture/, an event per check beside it, and no screenshot of a
+# passing check saved anywhere. `python3 test/capture.py show` lists the moments
+# and `frames` extracts one when asked; a failed check's frames are extracted at
+# the end, into samples/out/frames/.
 #
 # The probe service is enabled for the run, and the accessibility settings are
 # put back the way they were found - even when a check fails or the run is
@@ -29,11 +36,19 @@ RESTORE_ONLY=0
 LIST_ONLY=0
 QUIET=0
 ONLY=""
+# The run is recorded from the first check to the last unless --no-record is
+# given: one video, plus an event per check, and no screenshot taken during the
+# run at all. test/capture.py maps an event to the frame that was on screen then
+# and extracts it when somebody asks for it.
+RECORD=1
+FAILED_CHECKS=""
 case "${1:-}" in
     --restore) RESTORE_ONLY=1 ;;
     --list) LIST_ONLY=1 ;;
     --quiet) QUIET=1 ;;
     --only) ONLY=${2:-} ;;
+    --record) RECORD=1 ;;
+    --no-record) RECORD=0 ;;
 esac
 # A comma is how a shell user usually writes a list; spaces are how the loop reads it.
 ONLY=${ONLY//,/ }
@@ -51,6 +66,61 @@ ok() { [ "$QUIET" = 1 ] || say "ok   $*"; }
 bad() { say "FAIL $*"; FAIL=1; FAIL_COUNT=$((FAIL_COUNT + 1)); }
 
 device() { $ADB "$@"; }
+
+# --- the recording ------------------------------------------------------------
+# One video for the run and an event beside every moment worth seeing again. An
+# event costs no adb call: it is written on this side, and test/capture.py pairs
+# this machine's clock with the device's at the start and at the end, so a moment
+# becomes the frame that was on screen at that moment. No screenshot is taken
+# while the checks run; `python3 test/capture.py frames` takes one out of the
+# recording when somebody asks for it.
+capture_py() { python3 "$here/../test/capture.py" "$@" --dir "$CAPTURE_DIR"; }
+mark() { [ "$RECORD" = 1 ] || return 0; capture_py event "$@" >/dev/null 2>&1 || true; }
+
+start_recording() {
+    [ "$RECORD" = 1 ] || return 0
+    if ! command -v ffmpeg >/dev/null; then
+        say "recording: skipped, there is no ffmpeg to read it with later"
+        RECORD=0
+        return 0
+    fi
+    rm -rf "$CAPTURE_DIR"
+    # CAPTURE_SIZE/CAPTURE_BIT_RATE are for a run that would rather be quick than
+    # sharp: the frames are for looking at, and the checks assert on their own
+    # screenshots until they are moved onto the recording.
+    if capture_py start ${CAPTURE_SIZE:+--size "$CAPTURE_SIZE"} \
+            ${CAPTURE_BIT_RATE:+--bit-rate "$CAPTURE_BIT_RATE"} >/dev/null 2>&1; then
+        say "recording: $CAPTURE_DIR"
+    else
+        say "recording: could not start; the checks run without it"
+        RECORD=0
+    fi
+}
+
+# The last thing the run does. A failure is exactly when a frame is worth
+# pulling out, so those are extracted here and nothing else is: what a screenshot
+# is for is the check that did not pass.
+stop_recording() {
+    [ "$RECORD" = 1 ] || return 0
+    # Nothing was started: no device, or a run that died before the install.
+    [ -f "$CAPTURE_DIR/capture.json" ] || return 0
+    local summary name
+    if summary=$(capture_py stop 2>&1); then
+        printf '%s\n' "$summary" | sed 's/^/  /'
+    else
+        say "recording: ${summary:-stop failed}"
+        RECORD=0
+        return 0
+    fi
+    for name in $FAILED_CHECKS; do
+        capture_py frames --event "check:$name:failed" --out "$here/out/frames" \
+            >/dev/null 2>&1 || true
+    done
+    [ -n "$FAILED_CHECKS" ] \
+        && say "  frames of the failures: $here/out/frames" \
+        && say "  every moment: python3 test/capture.py show --dir $CAPTURE_DIR"
+    RECORD=0
+}
 
 # A dropped wireless session is not a failing check: ask mDNS for the current
 # port before deciding the suite cannot run. The watcher (test/adb-watch.sh)
@@ -79,6 +149,7 @@ ensure_device() {
 # (which resized the display) is still repaired; this suite never changes it.
 
 here=$(cd "$(dirname "$0")" && pwd)
+CAPTURE_DIR=$here/out/capture
 STATE_FILE=$here/out/device-state.txt
 RUN_STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 TIMING_LOG=$here/out/e2e-timings.log
@@ -187,6 +258,9 @@ recover_previous_run() {
 # `--restore`: put back what a dead run saved, or, with nothing saved, undo the
 # change this suite makes to a phone it knows nothing about.
 restore_only() {
+    # A run that died before its trap may have left the recorder holding the
+    # display, which would make the next recording start with nothing to show.
+    device shell pkill -INT screenrecord >/dev/null 2>&1 || true
     if ! device get-state >/dev/null 2>&1; then
         say "no device reachable (adb get-state failed)"
         return 1
@@ -603,6 +677,9 @@ reap_sessions() {
 }
 
 restore() {
+    # An interrupted run is when the video is worth most: stop and pull it here
+    # too, before the device is put back.
+    stop_recording
     reap_sessions
     if [ "$STATE_SAVED" = 1 ]; then
         put_device_back || say "WARNING: the device is still changed;" \
@@ -1632,7 +1709,13 @@ check() {
     fi
     local started=$SECONDS before=$FAIL_COUNT seconds
     CHECKS_RUN=$((CHECKS_RUN + 1))
+    mark "check:$name:start"
     "$@"
+    if [ "$FAIL_COUNT" != "$before" ]; then
+        FAILED_CHECKS="$FAILED_CHECKS $name"
+        mark "check:$name:failed"
+    fi
+    mark "check:$name:end"
     reap_sessions
     seconds=$((SECONDS - started))
     say "  ($name: ${seconds}s)"
@@ -1686,6 +1769,7 @@ if ! recover_previous_run; then
 fi
 
 install_everything
+start_recording
 check cursor test_cursor_jumps
 check cursor-escapes test_cursor_escapes_from_a_program
 check colour test_colour_escapes_render
@@ -1709,6 +1793,10 @@ check resize test_grid_resize_reaches_the_pty
 check rows test_rows_and_events
 check session test_service_types_into_a_termux_session
 check session-resize test_session_resize_follows_the_view
+
+# The recording ends with the last check: the gate and the summary are not
+# pictures of the app.
+stop_recording
 
 # The regression gate: a check that still passes but took much longer than its
 # own recent median is the slowdown this suite exists to notice quickly, and CI

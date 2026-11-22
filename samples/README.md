@@ -171,6 +171,7 @@ bash samples/e2e.sh                  # every check; APKs already installed
 bash samples/e2e.sh --list           # the check names
 bash samples/e2e.sh --only tui-echo  # one check
 bash samples/e2e.sh --quiet          # failures and the summary only
+bash samples/e2e.sh --no-record      # no recording: the fast path
 bash samples/e2e.sh --restore        # put back what a dead run left changed
 ```
 
@@ -178,6 +179,41 @@ The suite enables the probe service for the run and restores the accessibility
 settings afterwards, even when a check fails. It never changes the display size:
 a window is resized through the app itself. A dropped wireless-debugging session
 is not a failing check — `../test/adb-connect.py` asks mDNS for the current port.
+
+### The recording
+
+A run is recorded once, from the first check to the last, into
+`samples/out/capture/recording.mp4`, and every check writes an event beside it.
+No screenshot of a passing check is kept: a frame is pulled out of the video when
+somebody asks for one.
+
+```bash
+python3 test/capture.py show                      # every event, and its frame
+python3 test/capture.py frames --event check:tui-blink:end --out samples/out/frames
+python3 test/capture.py frames --at 12.5,40 --out samples/out/frames
+python3 test/capture.py frames --all --out samples/out/frames
+```
+
+A failed check's frames are extracted at the end of the run by themselves, into
+`samples/out/frames/`, because a failure is when a picture is worth having.
+
+The mapping is exact rather than approximate: `screenrecord` writes the device
+monotonic presentation time of every frame into a metadata track beside the video
+(`writeWinscopeMetadata`), and `test/capture.py` reads that track out of the MP4
+and pairs it with the container's pts. An event becomes the last frame presented
+at or before it, which is the picture that was on screen. Nothing is assumed
+about the frame rate: `screenrecord` writes a frame only when the screen changes,
+so a still screen is a long gap and not a missing frame. The one measured number
+is the offset between this machine's clock and the device's, sampled at the start
+and the end; on this phone the samples agree to 5-8 ms with a 26-28 ms round trip,
+a frame being 33 ms at 30 fps.
+
+A recording costs about 19 s on a 121 s suite: 13 s spread over the checks, where
+the encoder shares the device's CPU, and 6 s at the end pulling and remuxing
+twenty megabytes. `--no-record` is the fast path for a run that only needs the
+verdict.
+
+### What a run prints
 
 A full run prints a progress line with an estimate after every check:
 

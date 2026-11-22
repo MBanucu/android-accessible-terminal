@@ -21,6 +21,14 @@ and this project adheres to
 - The same three lines into a curses form that repaints ten times a second, so
   fast typing is checked while output is arriving rather than only into a
   program sitting in `getch`.
+- The e2e suite records itself: one video for the whole run, an event per check
+  beside it, and frames pulled out of the video on request instead of screenshots
+  taken while the checks run. The mapping is per frame, not guessed: `screenrecord`
+  writes each frame's presentation time into a metadata track, so an event is the
+  last frame presented at or before it. `test/capture.py` records, lists the
+  events (`show`) and extracts frames (`frames --event`/`--at`/`--all`); a failed
+  check's frames are extracted when the run ends. This costs about 13 s on a
+  121 s suite, so `--no-record` runs without it.
 - A regression gate at the end of a full run: every check has to finish within
   20% and two seconds of the median of its last five runs, and a check with a
   median under three seconds is not judged. `test/timings.py check` does the

@@ -152,6 +152,7 @@ Each takes an extra on the launch intent:
 | `--ez scroll true` | rows 2–3 as a `DECSTBM` region, scrolled once; rows 1 and 4 stay put |
 | `--ez edit true` | `IL`, `DL`, `ICH` and `DCH`, with all four results on screen together |
 | `--ez typing true` | every line it reads, numbered and measured, for the fast-typing check |
+| `--ez tuiTyping true` | a curses form that logs each submitted line with its length and counts every key it consumed |
 
 ## a11y-probe — the service the suite acts with
 

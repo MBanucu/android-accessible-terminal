@@ -13,8 +13,11 @@ and this project adheres to
 - Six sample checks for the pty and the terminal itself: the line discipline's
   flags, `ttyname`, `isatty` and `TIOCGWINSZ`; raw mode reading a key without
   Enter; eight-column tab stops; a `DECSTBM` region that scrolls without moving
-  the rows outside it; `IL`/`DL`/`ICH`/`DCH`; and two long lines typed back to
-  back, checked for order, duplicates and complete contents.
+  the rows outside it; `IL`/`DL`/`ICH`/`DCH`;  and two long lines typed back to back, checked for order, duplicates and
+  complete contents.
+- A curses fast-typing check: three lines submitted back to back into a curses
+  form, asserted on order, duplicates, every character and the number of keys
+  the program consumed.
 
 ### Removed
 
@@ -23,6 +26,9 @@ and this project adheres to
 
 ### Fixed
 
+- The sample's live stream wrote each send from its own thread, so a line and
+  its Enter could reach the pty in either order. One writer now drains a queue,
+  keeping typed bytes and their Enter in the order they were typed.
 - A sample's Termux session ends when the app does: the wrapper hangs up the
   pty once its control socket closes, instead of leaving the pty helper, a
   shell and the program behind. Android counts those against a 32-process

@@ -39,7 +39,7 @@ esac
 ONLY=${ONLY//,/ }
 START=$SECONDS
 CHECKS_RUN=0
-CHECKS="pty pty-flags pty-raw tty-tabs tty-scroll tty-edit tty-typing cursor cursor-escapes colour tui tui-echo tui-caret tui-blink tui-bg tui-symbols tui-modes resize rows session session-resize"
+CHECKS="pty pty-flags pty-raw tty-tabs tty-scroll tty-edit tty-typing tui-fast-typing cursor cursor-escapes colour tui tui-echo tui-caret tui-blink tui-bg tui-symbols tui-modes resize rows session session-resize"
 FAIL=0
 FAIL_COUNT=0
 
@@ -1443,6 +1443,51 @@ test_fast_typing_keeps_every_letter() {
         || bad "typing: the second line is not the one that was sent"
 }
 
+# --- fast typing into a curses TUI --------------------------------------------
+
+# `assets/tui-typing.py` reads keys one at a time, then prints each submitted
+# line with its length and a count of the keys it consumed. The two lines go in
+# back to back: a dropped letter shortens a row, a duplicate adds a key, and two
+# lines that changed places swap the rows.
+test_curses_fast_typing() {
+    launch --ez tuiTyping true
+    if ! await "tui-typing:started" 30; then
+        bad "curses typing: the TUI was never sent to the session"
+        return
+    fi
+    if ! await "CURSES-TYPING" 25; then
+        bad "curses typing: the TUI never drew"
+        return
+    fi
+    local first="THE-QUICK-BROWN-FOX-0123456789-JUMPS-OVER-THE-LAZY-DOG"
+    local second="PACK-MY-BOX-WITH-FIVE-DOZEN-LIQUOR-JUGS-9876543210"
+    local third="done"
+    submit_text "$first"
+    submit_text "$second"
+    submit_text "$third"
+    if ! await "got 3 " 30; then
+        bad "curses typing: not all three lines reached the TUI"
+        return
+    fi
+    sleep 2
+    local screen expected keys
+    screen=$(last_screen)
+    printf '%s\n' "$screen" | grep -qxF "got 1 ${#first} $first" \
+        && ok "curses typing: the first line arrived whole, in order" \
+        || bad "curses typing: the first line is not the one that was sent"
+    printf '%s\n' "$screen" | grep -qxF "got 2 ${#second} $second" \
+        && ok "curses typing: the second line arrived whole, in order" \
+        || bad "curses typing: the second line is not the one that was sent"
+    printf '%s\n' "$screen" | grep -qxF "got 3 ${#third} $third" \
+        && ok "curses typing: the short line after them arrived whole" \
+        || bad "curses typing: the short line after them did not"
+    expected=$(( ${#first} + ${#second} + ${#third} + 3 ))
+    keys=$(printf '%s\n' "$screen" | sed -n 's/^keys: //p' | tail -1)
+    [ "${keys:-0}" = "$expected" ] \
+        && ok "curses typing: $keys keys, one per character and per Enter" \
+        || bad "curses typing: $keys keys for $expected characters and Enters"
+}
+
 # --- run ----------------------------------------------------------------------
 
 # One check by name, or all of them: the install and the device state are the
@@ -1532,6 +1577,7 @@ check tty-tabs test_tab_stops
 check tty-scroll test_scroll_region
 check tty-edit test_insert_and_delete
 check tty-typing test_fast_typing_keeps_every_letter
+check tui-fast-typing test_curses_fast_typing
 check resize test_grid_resize_reaches_the_pty
 check rows test_rows_and_events
 check session test_service_types_into_a_termux_session

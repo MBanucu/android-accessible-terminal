@@ -9,6 +9,7 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.function.Consumer;
 
 /**
@@ -30,6 +31,14 @@ final class LiveStream {
     private volatile Socket controlConnection;
     /** The newest size, replayed when Termux connects after the first layout. */
     private volatile String pendingControl;
+    /**
+     * Everything typed, in the order it was typed, and the one thread that
+     * writes it. A thread per send would let text and its Enter reach the pty
+     * in either order, and two fast lines interleave inside the pty's input
+     * buffer: a program then sees letters of the second line inside the first.
+     */
+    private final ArrayDeque<byte[]> outbox = new ArrayDeque<>();
+    private Thread writer;
 
     /**
      * Opens a port on the loopback address and streams every chunk Termux writes
@@ -102,27 +111,67 @@ final class LiveStream {
         }
     }
 
-    /** Sends bytes to the session's stdin, off the UI thread. */
+    /**
+     * Queues bytes for the session's stdin, off the UI thread.
+     *
+     * <p>One writer drains the queue, so the order here is the order the pty
+     * sees: a line and its Enter stay together, and two submits cannot weave
+     * their letters into each other.
+     */
     void send(byte[] bytes) {
-        Socket live = connection;
-        if (live == null || bytes == null || bytes.length == 0) {
+        if (connection == null || bytes == null || bytes.length == 0) {
             return;
         }
-        byte[] copy = bytes.clone();
-        Thread writer = new Thread(() -> {
+        synchronized (outbox) {
+            outbox.addLast(bytes.clone());
+            if (writer == null || !writer.isAlive()) {
+                writer = new Thread(this::drainOutbox, "termux-input");
+                writer.setDaemon(true);
+                writer.start();
+            }
+            outbox.notifyAll();
+        }
+    }
+
+    /** Writes queued bytes until the queue is empty and nothing has closed it. */
+    private void drainOutbox() {
+        while (true) {
+            byte[] next;
+            synchronized (outbox) {
+                while (outbox.isEmpty()) {
+                    try {
+                        outbox.wait();
+                    } catch (InterruptedException done) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+                next = outbox.removeFirst();
+            }
+            Socket live = connection;
+            if (live == null) {
+                return;
+            }
             try {
-                live.getOutputStream().write(copy);
+                live.getOutputStream().write(next);
                 live.getOutputStream().flush();
             } catch (IOException gone) {
                 Log.w(TAG, "could not write to the session", gone);
+                return;
             }
-        }, "termux-input");
-        writer.setDaemon(true);
-        writer.start();
+        }
     }
 
     void close() {
         closeControl();
+        synchronized (outbox) {
+            outbox.clear();
+            Thread queued = writer;
+            writer = null;
+            if (queued != null) {
+                queued.interrupt();
+            }
+        }
         ServerSocket open = server;
         server = null;
         Socket live = connection;

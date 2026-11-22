@@ -8,6 +8,19 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- Six sample checks for the pty and the terminal itself: the line discipline's
+  flags, `ttyname`, `isatty` and `TIOCGWINSZ`; raw mode reading a key without
+  Enter; eight-column tab stops; a `DECSTBM` region that scrolls without moving
+  the rows outside it; `IL`/`DL`/`ICH`/`DCH`; and two long lines typed back to
+  back, checked for order, duplicates and complete contents.
+
+### Removed
+
+- The `opencode` check, which needed opencode installed and tested that program
+  rather than the view. The miniature pages check the same bytes.
+
 ### Fixed
 
 - A sample's Termux session ends when the app does: the wrapper hangs up the

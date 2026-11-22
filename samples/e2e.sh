@@ -6,7 +6,6 @@
 #
 #   bash test/local-build.sh --samples    # builds both APKs, then runs this suite
 #   bash samples/e2e.sh                   # the fast checks (APKs already installed)
-#   bash samples/e2e.sh --opencode        # also the TUI (slow, needs opencode)
 #   bash samples/e2e.sh --only tui-echo   # just one check
 #   bash samples/e2e.sh --only pty,tui-bg # several checks, one install
 #   bash samples/e2e.sh --list            # the check names
@@ -26,13 +25,11 @@ APK=samples/out/native-terminal.apk
 PROBE_APK=samples/out/a11y-probe.apk
 FILES=/sdcard/Android/data/$APP/files
 PROBE_FILES=/sdcard/Android/data/$PROBE/files
-OPENCODE=0
 RESTORE_ONLY=0
 LIST_ONLY=0
 QUIET=0
 ONLY=""
 case "${1:-}" in
-    --opencode) OPENCODE=1 ;;
     --restore) RESTORE_ONLY=1 ;;
     --list) LIST_ONLY=1 ;;
     --quiet) QUIET=1 ;;
@@ -42,7 +39,7 @@ esac
 ONLY=${ONLY//,/ }
 START=$SECONDS
 CHECKS_RUN=0
-CHECKS="pty cursor cursor-escapes colour tui tui-echo tui-caret tui-blink tui-bg tui-symbols tui-modes resize rows session session-resize opencode"
+CHECKS="pty pty-flags pty-raw tty-tabs tty-scroll tty-edit tty-typing cursor cursor-escapes colour tui tui-echo tui-caret tui-blink tui-bg tui-symbols tui-modes resize rows session session-resize"
 FAIL=0
 FAIL_COUNT=0
 
@@ -1208,23 +1205,6 @@ test_service_types_into_a_termux_session() {
     fi
 }
 
-# --- the TUI ------------------------------------------------------------------
-
-test_opencode_tui() {
-    launch --ez opencode true
-    sleep 20
-    local tree announcements
-    tree=$(dump e2e-opencode)
-    if printf '%s\n' "$tree" | grep -aq "Ask anything"; then
-        ok "opencode: the TUI's own text is in the tree"
-    else
-        bad "opencode: no TUI text reached the service"
-    fi
-    announcements=$(printf '%s\n' "$tree" | grep -ac 'ANNOUNCEMENT')
-    [ "$announcements" -gt 0 ] && ok "opencode: $announcements announcements" \
-        || bad "opencode: no announcements from a repainting TUI"
-}
-
 # --- the opencode entry page's glyphs and modes -------------------------------
 
 # The page was captured from its own pty at 100x30: six non-ASCII glyphs and
@@ -1304,6 +1284,165 @@ test_entry_page_modes() {
     fi
 }
 
+# --- the pty and the line discipline ------------------------------------------
+
+# `assets/pty-flags.py` reports what `script`'s pty gave the program: the device,
+# the three descriptors, the line discipline's flags and the size it is told.
+test_pty_reports_its_device() {
+    launch --ez ptyFlags true
+    if ! await "PTY-FLAGS" 30; then
+        bad "pty flags: the program never reported"
+        return
+    fi
+    sleep 2
+    local screen
+    screen=$(all_screens)
+    printf '%s\n' "$screen" | grep -qE '^tty: /dev/pts/[0-9]+$' \
+        && ok "pty flags: stdin is a pty device" \
+        || bad "pty flags: no pty device name in the grid"
+    has_line "$screen" "isatty: 1 1 1" \
+        && ok "pty flags: all three standard descriptors are terminals" \
+        || bad "pty flags: a standard descriptor is not a terminal"
+    has_line "$screen" "termios: icanon=1 echo=1 isig=1" \
+        && ok "pty flags: cooked mode, with echo and signals" \
+        || bad "pty flags: the line discipline is not in its default mode"
+    printf '%s\n' "$screen" | grep -qE '^winsize: 80x[0-9]+$' \
+        && ok "pty flags: TIOCGWINSZ reports the view's 80 columns" \
+        || bad "pty flags: TIOCGWINSZ does not match the view"
+}
+
+# `assets/pty-raw.py` clears ICANON, ECHO and ISIG and reads a single byte. In
+# cooked mode the byte would wait for Enter and be echoed by the kernel instead.
+test_pty_raw_mode_reads_a_key() {
+    launch --ez ptyRaw true
+    if ! await "raw: icanon=0 echo=0 isig=0" 30; then
+        bad "pty raw: tty.setraw did not clear ICANON, ECHO and ISIG"
+        return
+    fi
+    ok "pty raw: tty.setraw cleared ICANON, ECHO and ISIG"
+    if type_in_app "x" "raw-got: 120"; then
+        ok "pty raw: the key arrived without waiting for Enter"
+    else
+        bad "pty raw: the key did not reach the program"
+    fi
+}
+
+# --- tabs, regions and insert/delete ------------------------------------------
+
+# `assets/tty-tabs.py` writes two tab-separated lines: a tab that was dropped
+# would leave the second letter one column after the first.
+test_tab_stops() {
+    launch --ez tabs true
+    if ! await "TTY-TABS" 30; then
+        bad "tabs: the program never drew"
+        return
+    fi
+    sleep 2
+    local screen
+    screen=$(all_screens)
+    has_line "$screen" "A       B" \
+        && ok "tabs: HT moved B to the 9th column" \
+        || bad "tabs: the first tab did not land on a stop"
+    has_line "$screen" "ab      cd" \
+        && ok "tabs: a tab from mid-line landed on the same stops" \
+        || bad "tabs: the second tab did not land on a stop"
+}
+
+# Rows 1 and 4 are outside the DECSTBM region: they are what proves the line
+# feed at the bottom of the region scrolled only rows 2 and 3.
+test_scroll_region() {
+    launch --ez scroll true
+    if ! await "TTY-SCROLL" 30; then
+        bad "scroll: the program never drew"
+        return
+    fi
+    sleep 2
+    local screen
+    screen=$(last_screen)
+    [ "$(printf '%s\n' "$screen" | sed -n '1p')" = "top" ] \
+        && ok "scroll: the row above the region did not move" \
+        || bad "scroll: the row above the region moved (got '$(printf '%s\n' "$screen" | sed -n '1p')')"
+    [ "$(printf '%s\n' "$screen" | sed -n '2p')" = "in-2" ] \
+        && ok "scroll: the line feed scrolled the region" \
+        || bad "scroll: the region did not scroll (got '$(printf '%s\n' "$screen" | sed -n '2p')')"
+    [ -z "$(printf '%s\n' "$screen" | sed -n '3p')" ] \
+        && ok "scroll: the vacated row inside the region is blank" \
+        || bad "scroll: the vacated row still holds text"
+    [ "$(printf '%s\n' "$screen" | sed -n '4p')" = "bottom" ] \
+        && ok "scroll: the row below the region did not move" \
+        || bad "scroll: the row below the region moved"
+}
+
+# `assets/tty-edit.py` leaves four results on the screen at once: IL, DL, ICH
+# and DCH each moved or opened exactly the cells they were asked to.
+test_insert_and_delete() {
+    launch --ez edit true
+    if ! await "TTY-EDIT" 30; then
+        bad "edit: the program never drew"
+        return
+    fi
+    sleep 2
+    local screen
+    screen=$(last_screen)
+    [ -z "$(printf '%s\n' "$screen" | sed -n '2p')" ] \
+        && ok "edit: IL opened a blank row at 2" \
+        || bad "edit: IL left text in the row it inserted"
+    [ "$(printf '%s\n' "$screen" | sed -n '4p')" = "line-two" ] \
+        && ok "edit: IL pushed line-two down to row 4" \
+        || bad "edit: IL did not move the lines below it"
+    [ "$(printf '%s\n' "$screen" | sed -n '11p')" = "d-four" ] \
+        && ok "edit: DL pulled d-four up to row 11" \
+        || bad "edit: DL did not move the lines below it (got '$(printf '%s\n' "$screen" | sed -n '11p')')"
+    [ "$(printf '%s\n' "$screen" | sed -n '16p')" = "A  BCDE" ] \
+        && ok "edit: ICH opened two cells at column 2" \
+        || bad "edit: ICH did not shift the rest of the row (got '$(printf '%s\n' "$screen" | sed -n '16p')')"
+    [ "$(printf '%s\n' "$screen" | sed -n '17p')" = "ACDE" ] \
+        && ok "edit: DCH closed one cell at column 2" \
+        || bad "edit: DCH did not shift the rest of the row (got '$(printf '%s\n' "$screen" | sed -n '17p')')"
+}
+
+# --- typing under load ---------------------------------------------------------
+
+# One ACTION_SET_TEXT and Enter, with no retry: this check counts what the
+# program received, so a retried submit would look like a duplicate.
+submit_text() {
+    device shell "am broadcast -p $PROBE -a $PROBE.COMMAND --es pkg $APP \
+        --es text '$1\\n'" >/dev/null 2>&1
+}
+
+# Long lines, submitted back to back with no pause, so the second lands while
+# the first is still being drawn. The program numbers and measures what it read:
+# a swallowed letter shortens the line, a duplicate adds a row, and a reorder
+# swaps the two. A screen reader typing fast is the same path.
+test_fast_typing_keeps_every_letter() {
+    launch --ez typing true
+    if ! await "TTY-TYPING" 30; then
+        bad "typing: the program never started"
+        return
+    fi
+    local first="THE-QUICK-BROWN-FOX-0123456789-JUMPS-OVER-THE-LAZY-DOG"
+    local second="PACK-MY-BOX-WITH-FIVE-DOZEN-LIQUOR-JUGS-9876543210"
+    submit_text "$first"
+    submit_text "$second"
+    if ! await "got 2 " 30; then
+        bad "typing: the second line never arrived"
+        return
+    fi
+    sleep 2
+    local screen got
+    screen=$(last_screen)
+    got=$(printf '%s\n' "$screen" | grep -c '^got ')
+    [ "$got" = 2 ] \
+        && ok "typing: exactly two lines arrived for two submits" \
+        || bad "typing: $got lines arrived for two submits"
+    printf '%s\n' "$screen" | grep -qxF "got 1 ${#first} $first" \
+        && ok "typing: the first line arrived whole, in order" \
+        || bad "typing: the first line is not the one that was sent"
+    printf '%s\n' "$screen" | grep -qxF "got 2 ${#second} $second" \
+        && ok "typing: the second line arrived whole, in order" \
+        || bad "typing: the second line is not the one that was sent"
+}
+
 # --- run ----------------------------------------------------------------------
 
 # One check by name, or all of them: the install and the device state are the
@@ -1339,10 +1478,6 @@ record_run() {
         --run "$RUN_STARTED" --db "$here/../test/.timings.db" >/dev/null 2>&1 \
         || say "WARNING: could not record this run in test/.timings.db"
 }
-
-if [ "$ONLY" = opencode ]; then
-    OPENCODE=1
-fi
 
 if [ "$RESTORE_ONLY" = 1 ]; then
     restore_only
@@ -1391,16 +1526,16 @@ check tui-bg test_tui_background_box
 check tui-symbols test_entry_page_symbols
 check tui-modes test_entry_page_modes
 check pty test_pty_is_a_terminal
+check pty-flags test_pty_reports_its_device
+check pty-raw test_pty_raw_mode_reads_a_key
+check tty-tabs test_tab_stops
+check tty-scroll test_scroll_region
+check tty-edit test_insert_and_delete
+check tty-typing test_fast_typing_keeps_every_letter
 check resize test_grid_resize_reaches_the_pty
 check rows test_rows_and_events
 check session test_service_types_into_a_termux_session
 check session-resize test_session_resize_follows_the_view
-if [ "$OPENCODE" = 1 ]; then
-    check opencode test_opencode_tui
-elif [ -z "$ONLY" ]; then
-    say "skip opencode (pass --opencode)"
-fi
-
 if [ "$FAIL" = 0 ]; then
     say "PASS $CHECKS_RUN checks in $((SECONDS - START))s"
     record_run

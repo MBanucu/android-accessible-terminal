@@ -168,6 +168,18 @@ public final class MainActivity extends Activity {
         boolean colours = getIntent() != null && getIntent().getBooleanExtra("colors", false);
         boolean tui = getIntent() != null && getIntent().getBooleanExtra("tui", false);
         boolean echo = getIntent() != null && getIntent().getBooleanExtra("echo", false);
+        boolean ptyFlags = getIntent() != null
+                && getIntent().getBooleanExtra("ptyFlags", false);
+        boolean ptyRaw = getIntent() != null
+                && getIntent().getBooleanExtra("ptyRaw", false);
+        boolean tabs = getIntent() != null
+                && getIntent().getBooleanExtra("tabs", false);
+        boolean scroll = getIntent() != null
+                && getIntent().getBooleanExtra("scroll", false);
+        boolean edit = getIntent() != null
+                && getIntent().getBooleanExtra("edit", false);
+        boolean typing = getIntent() != null
+                && getIntent().getBooleanExtra("typing", false);
         boolean background = getIntent() != null
                 && getIntent().getBooleanExtra("background", false);
         boolean symbols = getIntent() != null
@@ -207,6 +219,18 @@ public final class MainActivity extends Activity {
             startTuiInTermux("tui-width.py", "width test in Termux");
         } else if (width) {
             startTui("tui-width.py", "width-tui");
+        } else if (ptyFlags) {
+            startTui("pty-flags.py", "pty-flags");
+        } else if (ptyRaw) {
+            startTui("pty-raw.py", "pty-raw");
+        } else if (tabs) {
+            startTui("tty-tabs.py", "tty-tabs");
+        } else if (scroll) {
+            startTui("tty-scroll.py", "tty-scroll");
+        } else if (edit) {
+            startTui("tty-edit.py", "tty-edit");
+        } else if (typing) {
+            startTui("tty-typing.py", "tty-typing");
         } else if (echo) {
             startTui("tui-echo.py", "echo-tui");
         } else if (background) {

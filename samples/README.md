@@ -125,11 +125,13 @@ shows the logo, the composer border and `2.3.2`, and the probe reads the same
 lines as row nodes. The caret in the composer is drawn where opencode puts it,
 because the view follows DEC mode 25.
 
-Nothing is typed in this mode by the suite — opencode's composer is not a shell
-prompt. Manually, keys do reach it: once a program owns the alternate screen the
-view hands committed text and key events to the pty as they arrive. The session
-it opens outlives the app: force-stopping closes the socket and the pty, but
-opencode keeps a session record (`opencode session list`).
+The suite no longer drives this mode — opencode's composer is not a shell prompt,
+and the scripts below check the same bytes it sends without needing opencode
+installed. Manually, keys do reach it: once a program owns the alternate screen
+the view hands committed text and key events to the pty as they arrive. The
+session ends with the app: force-stopping closes the socket, the wrapper hangs
+up the pty, and the program inside it exits. opencode still keeps a session
+record (`opencode session list`).
 
 ### The scripted modes
 
@@ -144,6 +146,12 @@ Each takes an extra on the launch intent:
 | `--ez background true` | a blue box (SGR 44) with a yellow one (SGR 43) below it, checked by counting pixels |
 | `--ez symbols true` | the seven non-ASCII glyphs opencode draws, with truecolor fills |
 | `--ez modes true` | the modes and queries opencode sends, then one sentinel row |
+| `--ez ptyFlags true` | `ttyname`, `isatty` on all three descriptors, the line discipline's flags and `TIOCGWINSZ` |
+| `--ez ptyRaw true` | `tty.setraw`, the flags it cleared, then one byte read without Enter |
+| `--ez tabs true` | `A\tB` and `ab\tcd`, so a dropped `HT` shows up as a wrong column |
+| `--ez scroll true` | rows 2–3 as a `DECSTBM` region, scrolled once; rows 1 and 4 stay put |
+| `--ez edit true` | `IL`, `DL`, `ICH` and `DCH`, with all four results on screen together |
+| `--ez typing true` | every line it reads, numbered and measured, for the fast-typing check |
 
 ## a11y-probe — the service the suite acts with
 
@@ -157,8 +165,7 @@ a node dump — goes through this app, so nothing taps a coordinate or types wit
 ## The end-to-end suite
 
 ```bash
-bash samples/e2e.sh                  # fast checks; APKs already installed
-bash samples/e2e.sh --opencode       # also the slow opencode TUI check
+bash samples/e2e.sh                  # every check; APKs already installed
 bash samples/e2e.sh --list           # the check names
 bash samples/e2e.sh --only tui-echo  # one check
 bash samples/e2e.sh --quiet          # failures and the summary only

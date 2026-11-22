@@ -24,7 +24,7 @@ repository needed:
 ```kotlin
 // app/build.gradle.kts
 dependencies {
-    implementation("io.github.mbanucu:android-accessible-terminal:0.1.0")
+    implementation("io.github.mbanucu:android-accessible-terminal:0.2.0")
 }
 ```
 
@@ -42,7 +42,7 @@ dependencyResolutionManagement {
 
 // app/build.gradle.kts
 dependencies {
-    implementation("com.github.MBanucu:android-accessible-terminal:0.1.0")
+    implementation("com.github.MBanucu:android-accessible-terminal:0.2.0")
 }
 ```
 
@@ -181,6 +181,14 @@ back afterwards.
 
 ## License
 
-Apache License 2.0, like the repository this was extracted from. The bundled
-DejaVu Sans Mono font is distributed under the [DejaVu fonts
-license](https://dejavu-fonts.github.io/License.html).
+GNU General Public License, version 3 or later. SPDX: `GPL-3.0-or-later`. The
+full text is in [`LICENSE`](LICENSE).
+
+This is a copyleft license: an app that links the library must itself be
+distributed under GPL-3.0-or-later (or a compatible license). If that is not what
+you want, the module is small and self-contained enough to study and reimplement,
+but there is no permissive grant.
+
+Version 0.1.0, published to JitPack before this change, was Apache-2.0; release
+0.2.0 is the first GPL release. The bundled DejaVu Sans Mono font keeps its own
+[DejaVu fonts license](https://dejavu-fonts.github.io/License.html).

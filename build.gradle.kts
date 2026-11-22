@@ -17,7 +17,7 @@ plugins {
 group = "io.github.mbanucu"
 // Central refuses to overwrite a version, so releases pass their version in:
 //   ./gradlew publishAggregationToCentralPortal -PVERSION_NAME=0.2.0
-version = providers.gradleProperty("VERSION_NAME").getOrElse("0.1.0")
+version = providers.gradleProperty("VERSION_NAME").getOrElse("0.2.0")
 
 android {
     namespace = "io.github.mbanucu.terminal"
@@ -95,8 +95,8 @@ afterEvaluate {
                     url.set("https://github.com/MBanucu/android-accessible-terminal")
                     licenses {
                         license {
-                            name.set("Apache License 2.0")
-                            url.set("https://www.apache.org/licenses/LICENSE-2.0")
+                            name.set("GNU General Public License v3.0 or later")
+                            url.set("https://www.gnu.org/licenses/gpl-3.0-standalone.html")
                         }
                     }
                     developers {

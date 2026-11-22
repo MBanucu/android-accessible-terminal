@@ -110,5 +110,5 @@ unzip -l build/nmcp/zip/aggregation.zip
 
 `io.github.mbanucu:android-accessible-terminal:<version>`, with the AAR, a sources
 jar, a javadoc jar, Gradle module metadata, the POM and a `.asc` signature for
-each. The POM carries the name, description, Apache-2.0 license, developer and
-SCM entries Central requires.
+each. The POM carries the name, description, GPL-3.0-or-later license, developer
+and SCM entries Central requires.

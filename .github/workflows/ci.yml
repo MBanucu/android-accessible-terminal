@@ -46,3 +46,6 @@ jobs:
           "$manager" "platforms;android-35" "build-tools;35.0.0" >/dev/null
           echo "sdk=$sdk" >>"$GITHUB_ENV"
       - run: ./gradlew --no-daemon assembleRelease
+      # The bundle the release workflow uploads, built without credentials: this
+      # catches a missing sources or javadoc jar before a tag does.
+      - run: ./gradlew --no-daemon nmcpZipAggregation

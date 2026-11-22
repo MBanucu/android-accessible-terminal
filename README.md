@@ -18,9 +18,18 @@ told when to resize the PTY or when a line was submitted.
 
 ## Install
 
-The library is published from this repository by [JitPack](https://jitpack.io),
-which builds a tag on demand and serves it as Maven coordinates. Add the
-repository and the dependency:
+Releases are published to Maven Central, so `mavenCentral()` is the only
+repository needed:
+
+```kotlin
+// app/build.gradle.kts
+dependencies {
+    implementation("io.github.mbanucu:android-accessible-terminal:0.1.0")
+}
+```
+
+Until the first Central release is out, or to build a tag that has not been
+released there, [JitPack](https://jitpack.io) serves the same sources:
 
 ```kotlin
 // settings.gradle.kts
@@ -37,8 +46,11 @@ dependencies {
 }
 ```
 
+How a release is cut — the Central Portal namespace, the signing key and the CI
+secrets — is in [`RELEASING.md`](RELEASING.md).
+
 Requirements: `minSdk 24`, Java 17. The AAR has no dependencies of its own; it
-uses only `android.*`.
+uses only `android.*`. Every published file is PGP-signed.
 
 The view loads `terminal-mono.ttf` from the host app's `assets/` when present —
 the DejaVu Sans Mono the samples ship — and falls back to the system monospace

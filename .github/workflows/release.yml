@@ -25,7 +25,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           # The artifact is built from the tag being released, not from main.
-          ref: ${{ github.event.release.tag_name || github.sha }}
+          # A manual run must be started from the tag too: --ref <tag>.
+          ref: ${{ github.event.release.tag_name || github.ref }}
 
       - uses: actions/setup-java@v4
         with:

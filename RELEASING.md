@@ -78,8 +78,11 @@ Publishing the GitHub release starts the workflow. To retry a failed run without
 creating another tag:
 
 ```bash
-gh workflow run release.yml -f version=0.2.0
+gh workflow run release.yml --ref 0.2.0 -f version=0.2.0
 ```
+
+Run it from the tag, not from `main`: the workflow checks out that ref, and the
+version and the code must belong together.
 
 The build is `USER_MANAGED`, so the deployment lands in the portal as a draft:
 open **Deployments**, check the validation, and press **Publish**. Once a release

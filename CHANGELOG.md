@@ -27,6 +27,15 @@ and this project adheres to
   `screenstream/client/stream.py` attaches, prints the shape of the stream and
   keeps frames when asked; a frame taken this way matched `screencap` pixel for
   pixel.
+- `VIDEO=1 STREAM=1 bash samples/e2e.sh` (`--video`) records the run from the
+  stream's own frames instead of `screenrecord`, and checks the file against what
+  the phone wrote and what the checks were shown: the phone's recorded frame count
+  must be the one `ffprobe` reads, and the file must reach the frame the last
+  check passed on. The status file gained `recording_from_ns`, the file's zero on
+  the stream's clock, because the recording's frame numbers are not the stream's
+  — it starts mid-capture and drops frames the encoder was busy for — while its
+  timestamps are the stream's own. Measured on a full run: 390 frames over 137 s,
+  out of 1248 changed frames the compositor offered.
 - `STREAM=1 bash samples/e2e.sh` makes the pixel checks read that stream: the
   probe's watch subscribes to the changed frames in-process through the module's
   `subscribe` instead of taking a screenshot every 333 ms, so it judges every change the screen made, and the

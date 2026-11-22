@@ -12,6 +12,7 @@
 #   bash samples/e2e.sh --quiet           # failures and the summary only
 #   bash samples/e2e.sh --no-record       # the fast path, no screen recording
 #   STREAM=1 bash samples/e2e.sh          # pixel checks read the screen stream
+#   VIDEO=1 STREAM=1 bash samples/e2e.sh  # and the run is recorded from its frames
 #   bash samples/e2e.sh --restore         # put back what a dead run left changed
 #
 # The run is recorded unless --no-record is given: one video for the whole suite
@@ -50,6 +51,12 @@ RECORD=1
 # three screenshots a second. Off by default, because it needs the screen-capture
 # permission, which the screenshots path does not.
 STREAM=${STREAM:-0}
+# VIDEO=1 (or --video, which also turns the stream on) records the run from the
+# frames the stream carried, instead of screenrecord's own capture: the frames a
+# pixel check is shown are then the frames of the file, by number. It needs the
+# same permission the stream does, so it is off by default as well.
+VIDEO=${VIDEO:-0}
+VIDEO_PATH=""
 FAILED_CHECKS=""
 case "${1:-}" in
     --restore) RESTORE_ONLY=1 ;;
@@ -60,6 +67,8 @@ case "${1:-}" in
     --no-record) RECORD=0 ;;
     --stream) STREAM=1 ;;
     --no-stream) STREAM=0 ;;
+    --video) VIDEO=1; STREAM=1 ;;
+    --no-video) VIDEO=0 ;;
 esac
 # A comma is how a shell user usually writes a list; spaces are how the loop reads it.
 ONLY=${ONLY//,/ }
@@ -161,6 +170,11 @@ ensure_device() {
 
 here=$(cd "$(dirname "$0")" && pwd)
 CAPTURE_DIR=$here/out/capture
+VIDEO_OUT=$here/out/video.mp4
+# Every frame a check was shown, as "frame ts", written by watch_answer. A file
+# rather than a variable because the answers are read inside command
+# substitutions, and a subshell's assignment would be lost.
+WATCHED=$here/out/watched.txt
 STATE_FILE=$here/out/device-state.txt
 RUN_STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 TIMING_LOG=$here/out/e2e-timings.log
@@ -357,6 +371,15 @@ watch_answer() { # name seconds
             --data "device_ns=$(watched "$answer" ts_ns)" \
             --data "frame=$(watched "$answer" frame)"
     fi
+    # The frame and its time, for --video: the recording has to reach the last
+    # frame a check passed on, or a check passed on a picture the file lacks.
+    local shown ts
+    shown=$(watched "$answer" frame)
+    ts=$(watched "$answer" ts_ns)
+    case "$shown$ts" in
+        ''|*[!0-9]*) ;;
+        *) printf '%s %s\n' "$shown" "$ts" >> "$WATCHED" ;;
+    esac
     printf '%s\n' "$answer"
 }
 
@@ -378,8 +401,10 @@ watch_said() { printf '%s\n' "$1" | tr '\n' ' ' | sed 's/  */ /g; s/ *$//'; }
 start_stream() {
     [ "$STREAM" = 1 ] || return 0
     device shell "appops set $PROBE PROJECT_MEDIA allow" >/dev/null 2>&1 || true
+    local record_extra=""
+    [ "$VIDEO" = 1 ] && record_extra="--ez record true"
     device shell "rm -f '$PROBE_FILES/screenstream.txt'; \
-        am start -n $PROBE/$STREAM_ACTIVITY" >/dev/null 2>&1
+        am start -n $PROBE/$STREAM_ACTIVITY $record_extra" >/dev/null 2>&1
     local i=0 state
     while [ "$i" -lt 150 ]; do
         state=$(probe_file screenstream | sed -n 's/^state=//p' | head -1)
@@ -412,6 +437,106 @@ stop_stream() {
     done
     say "WARNING: the screen stream did not stop; force-stopping the probe"
     device shell "am force-stop $PROBE" >/dev/null 2>&1
+}
+
+# --video records the run from the stream's own frames. A projection allows one
+# virtual display, so the recording cannot photograph the display a second time:
+# it encodes the frames the stream has already copied. The file is not numbered
+# like the stream - it starts wherever the capture was, and drops frames the
+# encoder was busy for - but it carries the stream's times, so a check's ts_ns
+# minus recording_from_ns is where its picture is.
+start_video() {
+    [ "$VIDEO" = 1 ] || return 0
+    : > "$WATCHED"
+    local i=0 path
+    while [ "$i" -lt 80 ]; do
+        path=$(probe_file screenstream | sed -n 's/^recording=//p' | head -1)
+        case "$path" in
+            ''|-) ;;
+            *)
+                VIDEO_PATH=$path
+                say "video: recording the run to $VIDEO_PATH"
+                return 0
+                ;;
+        esac
+        sleep 0.1
+        i=$((i + 1))
+    done
+    bad "video: the stream never started recording; this run has no video"
+    VIDEO=0
+}
+
+# Ends the recording with the capture - the stream's stop does both - and checks
+# the file against what the phone said it wrote and what the checks were shown:
+# a video that is shorter than the frame a check passed on is the one failure
+# this mode exists to catch. The cleanup's stop_stream then has nothing to stop.
+stop_video() {
+    [ "$VIDEO" = 1 ] || return 0
+    [ -n "$VIDEO_PATH" ] || return 0
+    device shell "am start -n $PROBE/$STREAM_ACTIVITY --ez stop true" >/dev/null 2>&1
+    local i=0 state
+    while [ "$i" -lt 50 ]; do
+        state=$(probe_file screenstream | sed -n 's/^state=//p' | head -1)
+        [ "$state" = stopped ] && break
+        sleep 0.1
+        i=$((i + 1))
+    done
+    # The encoder writes the file's index after its last frame, so the size goes
+    # still a moment after the state does.
+    local last="" size stable=0 tries=0
+    while [ "$tries" -lt 50 ]; do
+        size=$(device shell "wc -c < '$VIDEO_PATH'" 2>/dev/null | tr -d ' \r')
+        [ "${size:-0}" = "$last" ] && stable=$((stable + 1)) || stable=0
+        [ "$stable" -ge 3 ] && break
+        last=${size:-0}
+        sleep 0.1
+        tries=$((tries + 1))
+    done
+    # The status the encoder writes when it has finished follows the state, so the
+    # numbers are waited for instead of read once.
+    local status frames ms from last_ts at seen width height
+    i=0
+    while [ "$i" -lt 50 ]; do
+        status=$(probe_file screenstream)
+        frames=$(printf '%s\n' "$status" | sed -n 's/^recorded_frames=//p' | head -1)
+        [ "${frames:-0}" -gt 0 ] && break
+        sleep 0.1
+        i=$((i + 1))
+    done
+    mkdir -p "$(dirname "$VIDEO_OUT")"
+    if ! $ADB pull "$VIDEO_PATH" "$VIDEO_OUT" >/dev/null 2>&1; then
+        bad "video: could not pull $VIDEO_PATH off the phone"
+        return 1
+    fi
+    VIDEO=0
+    ms=$(printf '%s\n' "$status" | sed -n 's/^recorded_ms=//p' | head -1)
+    from=$(printf '%s\n' "$status" | sed -n 's/^recording_from_ns=//p' | head -1)
+    last_ts=$(awk '$2 + 0 > m { m = $2 + 0 } END { print m + 0 }' "$WATCHED" 2>/dev/null)
+    at=$([ "${from:-0}" -gt 0 ] && [ "${last_ts:-0}" -gt "$from" ] \
+        && echo $(( (last_ts - from) / 1000000 )) || echo "")
+    if ! command -v ffprobe >/dev/null; then
+        say "video: $VIDEO_OUT, ${frames:-0} frames, ${ms:-0} ms (no ffprobe to check it)"
+        return 0
+    fi
+    seen=$(ffprobe -v error -count_frames -select_streams v:0 \
+        -show_entries stream=nb_read_frames,width,height -of default=nw=1 "$VIDEO_OUT" \
+        2>/dev/null | sed -n 's/^nb_read_frames=//p')
+    width=$(ffprobe -v error -select_streams v:0 -show_entries stream=width \
+        -of default=nw=1 "$VIDEO_OUT" 2>/dev/null | sed -n 's/^width=//p')
+    height=$(ffprobe -v error -select_streams v:0 -show_entries stream=height \
+        -of default=nw=1 "$VIDEO_OUT" 2>/dev/null | sed -n 's/^height=//p')
+    if [ "${seen:-0}" -le 0 ]; then
+        bad "video: $VIDEO_OUT is not a readable MP4"
+        return 1
+    fi
+    [ "${frames:-0}" = "$seen" ] \
+        || bad "video: the phone wrote ${frames:-0} frames, the file has $seen"
+    if [ -n "$at" ]; then
+        [ "$at" -le "${ms:-0}" ] \
+            || bad "video: a check was shown a frame ${at} ms in, and the file is ${ms:-0} ms"
+    fi
+    say "video: $seen frames, ${width}x${height}, \
+$(awk "BEGIN { printf \"%.1f\", ${ms:-0} / 1000 }")s${at:+ (the last pass at ${at} ms inside it)}, $VIDEO_OUT"
 }
 
 # The probe walks the target window and writes the summary itself; the suite only
@@ -1811,6 +1936,7 @@ if [ "$STREAM" = 1 ] && ! start_stream; then
     record_run
     exit 1
 fi
+start_video
 start_recording
 check cursor test_cursor_jumps
 check cursor-escapes test_cursor_escapes_from_a_program
@@ -1837,8 +1963,9 @@ check session test_service_types_into_a_termux_session
 check session-resize test_session_resize_follows_the_view
 
 # The recording ends with the last check: the gate and the summary are not
-# pictures of the app.
+# pictures of the app. With --video this also ends the stream and checks the file.
 stop_recording
+stop_video
 
 # The regression gate: a check that still passes but took much longer than its
 # own recent median is the slowdown this suite exists to notice quickly, and CI

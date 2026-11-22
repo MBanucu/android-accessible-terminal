@@ -234,6 +234,18 @@ consumer can read at once; `taps` in `files/screenstream.txt` counts them. The d
 run does not start the stream, because the screenshots need no screen-capture
 consent and the stream does.
 
+`VIDEO=1 STREAM=1 bash samples/e2e.sh` (or `--video`, which turns the stream on
+itself) records the run from those same frames instead of `screenrecord`'s own
+capture, into `samples/out/video.mp4`. The file's frame numbers are not the
+stream's — it starts wherever the capture was, and drops frames the encoder was
+busy for — but its times are, and `files/screenstream.txt` says what the file's
+zero is (`recording_from_ns`), so the suite knows where a check's frame is in it.
+It checks that the file reaches the last frame a check passed on, that the phone's
+own frame count is the one `ffprobe` reads, and prints how far into the video the
+last pass was. On a full run that is 390 frames over 137 s from 1248 changed
+frames, so this recording is evidence of what was on the stream rather than a
+smooth video: `capture.py`'s is the smooth one.
+
 ## The end-to-end suite
 
 ```bash

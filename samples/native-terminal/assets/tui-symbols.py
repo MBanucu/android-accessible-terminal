@@ -4,7 +4,8 @@ Captured from `opencode` at 80x24 in Termux's own GUI, the entry page draws with
 seven non-ASCII glyphs - U+2580 upper half block, U+2588 full block, U+2584 lower
 half block, U+2503 heavy vertical, U+2579 heavy up, U+2026 ellipsis and U+00B7
 middle dot - and with truecolor SGR only: a grey-to-white logo gradient, fg
-#EEEEEE/#808080, bg #0A0A0A/#1E1E1E, a blue #5C9CF5 composer gutter and bold.
+#EEEEEE/#808080, bg #0A0A0A/#1E1E1E, a composer gutter that fades to #5C9CF5
+once it settles, a #484848/#1E1E1E rule on the canvas, and bold.
 
 This is the page in miniature: the block logo, the composer's blue gutter and
 `╹▀▀▀▀` rule, the model row, the footer and the version, on the same rows the
@@ -25,7 +26,8 @@ ACCENT = "\u001b[38;2;92;156;245m"  # #5C9CF5, the composer's blue gutter
 WHITE = "\u001b[38;2;255;255;255m"
 LIGHT = "\u001b[38;2;238;238;238m"
 GREY = "\u001b[38;2;128;128;128m"
-BORDER = "\u001b[38;2;67;67;67m"  # #434343, the rule under the panel
+PANEL_INK = "\u001b[38;2;30;30;30m"  # #1E1E1E as text: the rule's half blocks
+RULE_END = "\u001b[38;2;72;72;72m"   # #484848, the `╹` at the rule's left end
 RESET = "\u001b[0m"
 
 LOGO = [
@@ -75,15 +77,20 @@ def draw(width, height):
     put(19, 7, PANEL + GREY, "Build auto · Big Pickle Default / OpenCode")
     for row in (16, 17, 18, 19):
         put(row, 4, PANEL + ACCENT, "┃")
-    put(20, 4, BORDER, "╹")
-    put(20, 5, BORDER, "▀" * max(0, width - 6))
+    # The rule is under the panel, not on it: the page sets the canvas
+    # background again on this row and draws the half-block run in the panel's
+    # own colour, with a lighter `╹` at its left end. A view that kept the
+    # panel's background from the row above would look right here and wrong on
+    # the page, which is exactly what this row is for.
+    put(20, 4, BG + RULE_END, "╹")
+    put(20, 5, BG + PANEL_INK, "▀" * max(0, width - 6))
 
     # The footer is right-aligned under the rule, and the version sits on the
-    # page's last row - not beside the footer.
-    put(21, 4, GREY, "~")
+    # page's last row - not beside the footer. Both are on the canvas.
+    put(21, 4, BG + GREY, "~")
     footer = "tab agents  ctrl+p commands"
-    put(21, max(1, width - 1 - len(footer)), GREY, footer)
-    put(24, max(1, width - 6), GREY, "2.3.2")
+    put(21, max(1, width - 1 - len(footer)), BG + GREY, footer)
+    put(24, max(1, width - 6), BG + GREY, "2.3.2")
     # The caret is in the composer, at the start of the empty input.
     out.append(at(17, 7))
     return "".join(out)

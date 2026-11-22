@@ -67,10 +67,11 @@ nmcpAggregation {
     centralPortal {
         username.set(providers.environmentVariable("MAVEN_CENTRAL_USERNAME"))
         password.set(providers.environmentVariable("MAVEN_CENTRAL_PASSWORD"))
-        // USER_MANAGED leaves the deployment in the portal for a human to
-        // release. Change to AUTOMATIC once the first release has gone through
-        // validation without a manual fix.
-        publishingType.set("USER_MANAGED")
+        // AUTOMATIC publishes as soon as the portal has validated the bundle.
+        // 0.2.0 was released by hand first and validated without a fix, so a
+        // release now needs only the tag. Use USER_MANAGED to go back to a
+        // draft that a human presses Publish on.
+        publishingType.set("AUTOMATIC")
     }
 }
 

@@ -84,10 +84,15 @@ gh workflow run release.yml --ref 0.2.0 -f version=0.2.0
 Run it from the tag, not from `main`: the workflow checks out that ref, and the
 version and the code must belong together.
 
-The build is `USER_MANAGED`, so the deployment lands in the portal as a draft:
-open **Deployments**, check the validation, and press **Publish**. Once a release
-has gone through without manual fixes, change `publishingType` to `AUTOMATIC` in
-`build.gradle.kts` and the portal publishes after validation on its own.
+Publishing is `AUTOMATIC`: the workflow uploads the bundle, the portal validates
+it, and it goes to Maven Central without another press. Watch **Deployments**
+until the row reads `PUBLISHED`; validation takes a few minutes and the
+repository mirrors it shortly after.
+
+If validation fails, the deployment stops as `FAILED` and nothing is published,
+so the version is still free: drop the deployment, fix the problem, and tag a
+new version (or re-run the same one). Central never replaces a version that did
+publish, so a bad release is fixed by tagging forward, not by reusing the number.
 
 ## Publishing from a workstation
 
@@ -100,6 +105,8 @@ export SIGNING_KEY="$(cat private-key.asc)"
 export SIGNING_PASSWORD=…
 ./gradlew publishAggregationToCentralPortal -PVERSION_NAME=0.2.0
 ```
+
+That publishes immediately once validation passes, exactly like the workflow.
 
 `nmcpZipAggregation` builds the bundle without uploading it — useful for checking
 that the AAR, POM, sources, javadoc and signatures are all present:

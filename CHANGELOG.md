@@ -1,7 +1,9 @@
 # Changelog
 
-Notable changes to this project. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
@@ -29,12 +31,13 @@ the sources under `terminal/src` are identical to 0.1.0.
 ### Changed
 
 - The Maven group is `io.github.mbanucu`, the namespace verified in the Central
-  Portal. The JitPack coordinate stays `com.github.MBanucu:android-accessible-terminal`.
+  Portal. The JitPack coordinate stays
+  `com.github.MBanucu:android-accessible-terminal`.
 
 ### Fixed
 
-- The POM declared Apache-2.0 while `LICENSE` has always been GPL-3.0; the POM
-  now says GPL-3.0-or-later. Release notes for 0.1.0 record the same.
+- The POM declares `GPL-3.0-or-later`, matching the `LICENSE` file, which has
+  been GPL-3.0 since the extraction. The 0.1.0 POM said Apache-2.0 by mistake.
 - CI installed the Android SDK with an action that runs `sdkmanager tools`, which
   current cmdline-tools no longer provide; the platform is installed directly now.
 
@@ -68,11 +71,8 @@ its own repository. The first standalone version of the library.
 - The `samples/native-terminal` and `samples/a11y-probe` apps, with
   `samples/e2e.sh` driving the view on a device through an `AccessibilityService`.
 - A Gradle `com.android.library` build producing the AAR, published to JitPack.
-
-### Notes
-
-- Licensed GPL-3.0-or-later from the extraction. The 0.1.0 POM said Apache-2.0 by
-  mistake; the code was never Apache-licensed.
+- GPL-3.0-or-later licensing, carried over from the repository it was extracted
+  from.
 
 [Unreleased]: https://github.com/MBanucu/android-accessible-terminal/compare/0.2.0...HEAD
 [0.2.0]: https://github.com/MBanucu/android-accessible-terminal/compare/0.1.0...0.2.0

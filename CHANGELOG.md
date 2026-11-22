@@ -10,6 +10,38 @@ and this project adheres to
 
 ### Added
 
+- A raw screen stream from the phone itself: `StreamActivity` asks for the display
+  once and `StreamService` serves it as RGBA_8888 frames straight from an
+  `ImageReader` - no encoder, no container - on `127.0.0.1:7100`, which apps reach
+  directly and adb reaches through `adb forward`. Each frame is a 36-byte header
+  (`RAW1`, size, stride, format, frame number, device timestamp) and its pixels.
+  It is VFR the way the recording is: only frames whose pixels changed are
+  numbered and sent, so a still screen sends nothing and the gaps are idle time.
+  Consent can come from `adb shell appops set <pkg> PROJECT_MEDIA allow`, which
+  starts the capture with no dialog at all, or from the probe clicking the system
+  dialog as a screen reader would. `test/stream.py` attaches, prints the shape of
+  the stream and keeps frames when asked; a frame taken this way matched
+  `screencap` pixel for pixel.
+- `STREAM=1 bash samples/e2e.sh` makes the pixel checks read that stream: the
+  probe's watch subscribes to the changed frames in-process instead of taking a
+  screenshot every 333 ms, so it judges every change the screen made, and the
+  frame number and device time in its answer are the stream's own. It judges the
+  screen it starts on once as well, from a screenshot numbered as the source's
+  last frame, because a stream says what changed and a check may start while the
+  app is already drawn. A tap shares the same pooled frame as the socket
+  consumers, so both can read at once. The default run is unchanged and needs no
+  screen-capture consent.
+
+- The pixel checks watch the screen on the phone: the probe service takes its own
+  screenshots through the accessibility screenshot API, numbers only the frames
+  where the screen changed, counts their pixels there, and answers with the frame
+  number and the device time of the first frame that held what was asked for. No
+  PNG crosses adb any more, a frame caught mid-repaint is simply not the frame
+  that passes, and the blink check now fails a caret that is only ever on or off
+  instead of counting samples. A pass is marked with its frame's device time, the
+  clock the recording's frames already use, so `capture.py frames
+  --event pixel:colour:pass` is that exact frame out of the video.
+
 - Six sample checks for the pty and the terminal itself: the line discipline's
   flags, `ttyname`, `isatty` and `TIOCGWINSZ`; raw mode reading a key without
   Enter; eight-column tab stops; a `DECSTBM` region that scrolls without moving

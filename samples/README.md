@@ -140,7 +140,7 @@ Each takes an extra on the launch intent:
 | extra | what it feeds |
 |---|---|
 | `--ez cursor true` | `CUP`, `CUU`/`CUF`, `VPA`/`CHA`, `CSI s`/`CSI u` and the alternate screen, one step at a time, recording `cursor=row,col` in `files/evidence.txt` |
-| `--ez colors true` | `\e[31m`, `\e[32m`, `\e[1;34m` and `\e[38;5;208m`; the suite also counts red, green and blue pixels, because rows alone pass even in default grey |
+| `--ez colors true` | `\e[31m`, `\e[32m`, `\e[1;34m` and `\e[38;5;208m`; the probe also counts red, green and blue pixels on the device, because rows alone pass even in default grey |
 | `--ez tui true` | a curses box, menu and status line, driven with `n`, `p`, `t`, `q`; also a blinking block caret the suite samples in two frames |
 | `--ez echo true` | an input box and the last three submitted lines above it, one character at a time from the service |
 | `--ez background true` | a blue box (SGR 44) with a yellow one (SGR 43) below it, checked by counting pixels |
@@ -164,6 +164,72 @@ service by hand. Every check in `e2e.sh` — `ACTION_SET_TEXT`, a focus, a scrol
 a node dump — goes through this app, so nothing taps a coordinate or types with
 `input text`.
 
+It also takes the screenshots the pixel checks assert on (`PixelWatch`): the
+service declares `canTakeScreenshot`, and a `--es pixels` command starts a watch
+that answers in its own file. The platform allows one screenshot every 333 ms,
+so a watch paces itself just above that, drops every frame that changed nothing,
+and stops the moment a frame holds what was asked for. With the screen stream
+running, a watch skips the screenshots and subscribes to the stream's changed
+frames instead, which is every change rather than three a second; see below.
+
+### The screen stream
+
+`StreamActivity` asks the system for the display once, and `StreamService` serves
+it as a raw stream with no encoder and no container in the way: RGBA_8888 frames
+straight from an `ImageReader`, numbered, timed on the device, and sent only when
+the screen changes. Anything on the phone attaches to `127.0.0.1:7100`; adb
+reaches the same port through a forward.
+
+```bash
+# Consent. The app-op is the quiet way and needs no screen reader:
+adb shell appops set io.github.mbanucu.samples.a11yprobe PROJECT_MEDIA allow
+adb shell am start -n io.github.mbanucu.samples.a11yprobe/.StreamActivity
+# Or let the probe accept the system dialog itself, as a screen reader would:
+# with the probe enabled, start the same activity and it clicks "Start".
+
+adb forward tcp:7100 tcp:7100                 # for anything on the other end
+python3 test/stream.py --seconds 5            # read frames, print their shape
+python3 test/stream.py --frames 3 --png samples/out/stream   # keep a few
+```
+
+A frame is a 36-byte big-endian header — `RAW1`, width, height, row stride,
+format, frame number, timestamp in nanoseconds — then `stride * height` bytes of
+RGBA. The timestamp is the compositor's presentation time on the device's elapsed
+clock, the clock the recording's per-frame metadata uses, so a frame here and a
+frame in the video are comparable without an offset; on this phone the frames
+matched `screencap` pixel for pixel (4,608,000 of them, none different).
+
+The stream is VFR in the same sense the recording is: the compositor offers
+frames at the display's rate either way, and only frames whose pixels changed are
+numbered and sent. A still screen sends nothing, a blinking caret sends two
+frames, and the gaps between frame numbers are idle time rather than lost frames.
+Motion is around ten frames a second here, with gaps from 50 to 170 ms.
+
+It is raw, so it is big: 18.4 MB a frame at native resolution (1440x3200).
+`--ei scale 2` hands the frames over at half size instead (720x1600, 4.6 MB),
+composited at that size rather than downscaled afterwards. A consumer that falls
+behind gets the newest frame and older ones are dropped — `frames_skipped` in
+`files/stream.txt` counts them — and a consumer that stops reading is
+disconnected after two seconds. That is the trade a raw stream makes: the screen
+never waits for a slow reader, and memory stays in a pool of three frames.
+
+An app in this process can attach without a socket: the pixel watch does, which is
+what `STREAM=1 bash samples/e2e.sh` turns on. Every pixel check then judges every
+changed frame instead of a screenshot every 333 ms, and the frame number and time
+in its answer are the source's — the same numbers a consumer on the socket sees,
+so `python3 test/capture.py frames --event pixel:tui-blink:pass` still points at
+the right picture in the recording. It also judges the screen it starts on, once,
+from a screenshot: a stream says what changed, and a check that begins while the
+app is already drawn (a caret that does not blink) would otherwise have nothing to
+look at. That first frame carries the number of the last frame the source sent,
+which is still what the display shows. A capture started this way is stopped with
+`am start -n io.github.mbanucu.samples.a11yprobe/.StreamActivity --ez stop true`;
+the app-op can then go back to `default`. A tap holds the same frame as the sockets (the
+buffer goes back to the pool when the last holder lets go), so a watch and a
+consumer can read at once; `taps` in `files/stream.txt` counts them. The default
+run does not start the stream, because the screenshots need no screen-capture
+consent and the stream does.
+
 ## The end-to-end suite
 
 ```bash
@@ -184,8 +250,9 @@ is not a failing check — `../test/adb-connect.py` asks mDNS for the current po
 
 A run is recorded once, from the first check to the last, into
 `samples/out/capture/recording.mp4`, and every check writes an event beside it.
-No screenshot of a passing check is kept: a frame is pulled out of the video when
-somebody asks for one.
+No screenshot is taken during a run at all: the pixel checks watch the screen on
+the device (below), and a frame is pulled out of the video when somebody asks for
+one.
 
 ```bash
 python3 test/capture.py show                      # every event, and its frame
@@ -209,6 +276,16 @@ recording explains its own timing and nothing has to be remuxed. The one measure
 number is the offset between this machine's clock and the device's, sampled at the
 start and the end; on this phone the samples agree to 2-8 ms with a 20-28 ms round
 trip, a frame being 33 ms at 30 fps.
+
+The pixel checks do not read this video, and no pixels cross adb to make them
+pass. The probe takes the frames itself - a screenshot through the accessibility
+API, or, with `STREAM=1`, the stream's own frames - numbers only the ones where
+the screen changed, counts their pixels on the phone, and answers with the frame
+number and the device time of the first frame that held what the check asked for. Both are on the phone's clock, so the pass is
+also an event — `pixel:colour:pass` — that `frames` takes out of the recording
+with no clock offset in the way. What crosses the wire is the answer, a few lines
+of text, not a 1440x3200 PNG. A watch only evaluates frames of the app under
+test, so a colour left on screen by the previous check cannot pass the next one.
 
 The video stays on the device (`/data/local/tmp/suite-capture.mp4`) until the run
 is over: `stop` interrupts the recorder, waits for it to exit so the file is

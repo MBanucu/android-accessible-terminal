@@ -11,13 +11,14 @@
 #   bash samples/e2e.sh --list            # the check names
 #   bash samples/e2e.sh --quiet           # failures and the summary only
 #   bash samples/e2e.sh --no-record       # the fast path, no screen recording
+#   STREAM=1 bash samples/e2e.sh          # pixel checks read the screen stream
 #   bash samples/e2e.sh --restore         # put back what a dead run left changed
 #
 # The run is recorded unless --no-record is given: one video for the whole suite
-# in samples/out/capture/, an event per check beside it, and no screenshot of a
-# passing check saved anywhere. `python3 test/capture.py show` lists the moments
-# and `frames` extracts one when asked; a failed check's frames are extracted at
-# the end, into samples/out/frames/.
+# in samples/out/capture/, an event per check beside it, and no screenshot taken
+# during the run at all. `python3 test/capture.py show` lists the moments and
+# `frames` extracts one when asked; a failed check's frames are extracted at the
+# end, into samples/out/frames/.
 #
 # The probe service is enabled for the run, and the accessibility settings are
 # put back the way they were found - even when a check fails or the run is
@@ -41,6 +42,11 @@ ONLY=""
 # run at all. test/capture.py maps an event to the frame that was on screen then
 # and extracts it when somebody asks for it.
 RECORD=1
+# STREAM=1 (or --stream) starts the probe's screen stream once and lets every
+# pixel check read it: the checks then see every changed frame instead of three
+# screenshots a second. Off by default, because it needs the screen-capture
+# permission, which the screenshots path does not.
+STREAM=${STREAM:-0}
 FAILED_CHECKS=""
 case "${1:-}" in
     --restore) RESTORE_ONLY=1 ;;
@@ -49,6 +55,8 @@ case "${1:-}" in
     --only) ONLY=${2:-} ;;
     --record) RECORD=1 ;;
     --no-record) RECORD=0 ;;
+    --stream) STREAM=1 ;;
+    --no-stream) STREAM=0 ;;
 esac
 # A comma is how a shell user usually writes a list; spaces are how the loop reads it.
 ONLY=${ONLY//,/ }
@@ -86,8 +94,8 @@ start_recording() {
     fi
     rm -rf "$CAPTURE_DIR"
     # CAPTURE_SIZE/CAPTURE_BIT_RATE are for a run that would rather be quick than
-    # sharp: the frames are for looking at, and the checks assert on their own
-    # screenshots until they are moved onto the recording.
+    # sharp: the frames are for looking at, while the checks watch the pixels
+    # themselves, on the device.
     if capture_py start ${CAPTURE_SIZE:+--size "$CAPTURE_SIZE"} \
             ${CAPTURE_BIT_RATE:+--bit-rate "$CAPTURE_BIT_RATE"} >/dev/null 2>&1; then
         say "recording: $CAPTURE_DIR"
@@ -311,6 +319,83 @@ enable_probe() {
 # One command in the app's own external files, or the probe's.
 evidence() { device shell "cat $FILES/evidence.txt" 2>/dev/null; }
 probe_file() { device shell "cat $PROBE_FILES/$1.txt" 2>/dev/null; }
+
+# --- pixels, watched on the device --------------------------------------------
+# A pixel check used to pull a screenshot over adb and count it on this side,
+# which made the screen a picture taken at some moment after the fact. The probe
+# takes the screenshot itself now: the frame, its number and the device's time
+# for it never leave the phone. Only frames where the screen changed are
+# numbered, and a check passes on the first one that holds what it asked for.
+# With STREAM=1 the frames come from the probe's stream instead - every changed
+# frame at the rate the screen changes, not a screenshot every 333 ms - and the
+# numbers and times a check reports are the source's own.
+watch_pixels() { # name extras...
+    local name=$1
+    shift
+    device shell "rm -f '$PROBE_FILES/$name.txt'; am broadcast -p $PROBE \
+        -a $PROBE.COMMAND --es pkg $APP --es pixels '$name' $*" >/dev/null 2>&1
+}
+
+# The watch's answer, once it has one: polled on the device like `await`, so a
+# hit costs one round trip. A pass is marked with the device time of its frame,
+# which is the clock the recording's frames carry, so `capture.py frames
+# --event pixel:NAME:pass` is that exact frame out of the video.
+watch_answer() { # name seconds
+    local name=$1 seconds=${2:-20} answer
+    answer=$(timeout "$((seconds + 15))" "$ADB" shell "i=0
+        while [ \$i -lt $((seconds * 10)) ]; do
+            grep -aq '^result=' '$PROBE_FILES/$name.txt' 2>/dev/null && break
+            sleep 0.1
+            i=\$((i + 1))
+        done
+        cat '$PROBE_FILES/$name.txt' 2>/dev/null")
+    if printf '%s\n' "$answer" | grep -aq '^result=pass'; then
+        mark "pixel:$name:pass" \
+            --data "device_ns=$(watched "$answer" ts_ns)" \
+            --data "frame=$(watched "$answer" frame)"
+    fi
+    printf '%s\n' "$answer"
+}
+
+# One field of a watch's answer: a count, a cell mean, the frame or its time.
+watched() { printf '%s\n' "$1" | sed -n "s/^$2=//p" | tail -1; }
+
+# A watch's answer as one line, for the failure message.
+watch_said() { printf '%s\n' "$1" | tr '\n' ' ' | sed 's/  */ /g; s/ *$//'; }
+
+# --- the stream, when the run asks for its frames ------------------------------
+# STREAM=1 starts the probe's raw source once and every pixel check subscribes to
+# it, so a check sees every changed frame instead of three screenshots a second.
+# Consent comes from the app-op, which starts the capture with no dialog; a device
+# that refuses that route falls back to the probe clicking the dialog itself,
+# which is why this runs after the service is enabled. It runs at native size
+# because a check names its region in the display's own coordinates.
+start_stream() {
+    [ "$STREAM" = 1 ] || return 0
+    device shell "appops set $PROBE PROJECT_MEDIA allow" >/dev/null 2>&1 || true
+    device shell "rm -f '$PROBE_FILES/stream.txt'; \
+        am start -n $PROBE/.StreamActivity" >/dev/null 2>&1
+    local i=0 state
+    while [ "$i" -lt 150 ]; do
+        state=$(probe_file stream | sed -n 's/^state=//p' | head -1)
+        case "$state" in
+            streaming) return 0 ;;
+            failed) return 1 ;;
+        esac
+        sleep 0.1
+        i=$((i + 1))
+    done
+    return 1
+}
+
+# The app-op is a change this run made to the phone, so it goes back with the rest.
+# The capture is stopped through the activity, not by force-stopping the probe:
+# the accessibility service stays bound, so the next run does not pay for a rebind.
+stop_stream() {
+    [ "$STREAM" = 1 ] || return 0
+    device shell "am start -n $PROBE/.StreamActivity --ez stop true \
+        >/dev/null 2>&1; appops set $PROBE PROJECT_MEDIA default" >/dev/null 2>&1
+}
 
 # The probe walks the target window and writes the summary itself; the suite only
 # reads values such as rows= and prompt.actions=.
@@ -680,6 +765,7 @@ restore() {
     # An interrupted run is when the video is worth most: stop and pull it here
     # too, before the device is put back.
     stop_recording
+    stop_stream
     reap_sessions
     if [ "$STATE_SAVED" = 1 ]; then
         put_device_back || say "WARNING: the device is still changed;" \
@@ -775,7 +861,7 @@ test_cursor_jumps() {
 
 # --- colours ------------------------------------------------------------------
 
-# The rows prove the SGR was consumed; the screenshot proves it was drawn.
+# The rows prove the SGR was consumed; the pixels prove it was drawn.
 test_colour_escapes_render() {
     launch --ez colors true
     if ! await "cursor:colors" 12; then
@@ -807,37 +893,20 @@ test_colour_escapes_render() {
             || bad "colour: $marker is missing from the grid (got: $screen)"
     done
 
-    if ! command -v ffmpeg >/dev/null; then
-        say "skip colour pixels (no ffmpeg to read the screenshot)"
-        return
+    # The pixels are counted on the device now: the probe takes the screen there
+    # and answers with the first frame that had all three colours, in the band the
+    # old screenshot counted (1440 wide, 900 high, from y=150).
+    local answer
+    watch_pixels colour --es region "0,150,1440,900" --es colours \
+        "red,150,255,0,109,0,109,200:green,0,109,120,255,0,109,200:blue,0,129,0,255,151,255,200"
+    answer=$(watch_answer colour 20)
+    if printf '%s\n' "$answer" | grep -aq '^result=pass'; then
+        ok "colour: the red, green and bright-blue SGRs reached the pixels" \
+            "(red $(watched "$answer" count.red), green $(watched "$answer" count.green)," \
+            "blue $(watched "$answer" count.blue), on frame $(watched "$answer" frame))"
+    else
+        bad "colour: the SGRs did not reach the pixels ($(watch_said "$answer"))"
     fi
-    local shot=samples/out/colour.png counts red green blue
-    device exec-out screencap -p > "$shot" 2>/dev/null
-    counts=$(ffmpeg -loglevel error -i "$shot" -vf "crop=1440:900:0:150" \
-        -f rawvideo -pix_fmt rgb24 - 2>/dev/null | python3 -c '
-import sys
-d = sys.stdin.buffer.read()
-red = green = blue = 0
-for i in range(0, len(d) - 2, 3):
-    r, g, b = d[i], d[i + 1], d[i + 2]
-    if r > 150 and g < 110 and b < 110:
-        red += 1
-    elif g > 120 and r < 110 and b < 110:
-        green += 1
-    elif b > 150 and r < 130:
-        blue += 1
-print(red, green, blue)
-')
-    read -r red green blue <<< "$counts"
-    [ "${red:-0}" -gt 200 ] \
-        && ok "colour: the red SGR reached the pixels ($red red pixels)" \
-        || bad "colour: no red pixels from SGR 31 (got '${red:-0}')"
-    [ "${green:-0}" -gt 200 ] \
-        && ok "colour: the green SGR reached the pixels ($green green pixels)" \
-        || bad "colour: no green pixels from SGR 32 (got '${green:-0}')"
-    [ "${blue:-0}" -gt 200 ] \
-        && ok "colour: the bright-blue SGR reached the pixels ($blue blue pixels)" \
-        || bad "colour: no blue pixels from SGR 1;34 (got '${blue:-0}')"
 }
 
 # --- a curses TUI, driven through the accessibility prompt ---------------------
@@ -962,45 +1031,6 @@ test_tui_echoes_the_line_above() {
     fi
 }
 
-# Mean brightness of cells in one band of a screenshot: <shot> <left> <top>
-# <right> <bottom> <cols> <col>... The cell width is the row's own width over the
-# grid's columns, so this works at whatever size the view happens to be.
-cell_means() {
-    local shot=$1
-    shift
-    python3 - "$shot" "$@" <<'EOF'
-import math, subprocess, sys
-shot = sys.argv[1]
-left, top, right, bottom, cols = map(int, sys.argv[2:7])
-cells = [int(v) for v in sys.argv[7:]]
-cell = (right - left) / cols
-
-def mean(col):
-    data = subprocess.run(['ffmpeg', '-loglevel', 'error', '-i', shot, '-vf',
-        'crop=%d:%d:%d:%d' % (math.ceil(cell), bottom - top, round(left + col * cell), top),
-        '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], capture_output=True).stdout
-    return sum(data) / len(data) if data else -1
-
-print(' '.join('%.0f' % mean(col) for col in cells))
-EOF
-}
-
-# Pixels near a colour in a screenshot: <shot> <r> <g> <b> <tol>.
-color_pixels() {
-    python3 - "$@" <<'EOF'
-import subprocess, sys
-shot, r, g, b, tol = sys.argv[1:6]
-r, g, b, tol = map(int, (r, g, b, tol))
-data = subprocess.run(['ffmpeg', '-loglevel', 'error', '-i', shot, '-f', 'rawvideo',
-    '-pix_fmt', 'rgb24', '-'], capture_output=True).stdout
-count = 0
-for i in range(0, len(data) - 2, 3):
-    if abs(data[i] - r) <= tol and abs(data[i + 1] - g) <= tol and abs(data[i + 2] - b) <= tol:
-        count += 1
-print(count)
-EOF
-}
-
 # --- the caret the view draws (not the program) --------------------------------
 
 # A TUI positions the cursor and leaves drawing it to the terminal. The echo TUI
@@ -1013,13 +1043,9 @@ test_tui_caret_is_visible() {
         bad "caret: the echo TUI never drew its input box"
         return
     fi
-    if ! command -v ffmpeg >/dev/null; then
-        say "skip caret pixels (no ffmpeg to read the screenshot)"
-        return
-    fi
     # The row's own bounds are the cell geometry: a column is the view's width
     # over the grid's. Waiting for the grid to settle first keeps a keyboard that
-    # is still opening from moving the row between the dump and the screenshot.
+    # is still opening from moving the row between the dump and the pixels.
     settled_grid 16 >/dev/null || true
     local tree row_line row_text bounds left top right bottom cols caret_col
     tree=$(dump e2e-caret)
@@ -1043,27 +1069,25 @@ test_tui_caret_is_visible() {
     indent=$(printf '%s\n' "$row_text" | awk '{ match($0, /^ */); print RLENGTH }')
     caret_col=$((indent + 5))
 
-    local shot=samples/out/caret.png means caret_mean=0 blank_mean=999 lit dark
-    local attempt
-    for attempt in 1 2 3 4 5; do
-        device exec-out screencap -p > "$shot" 2>/dev/null
-        means=$(cell_means "$shot" "$left" "$top" "$right" "$bottom" "$cols" \
-            "$caret_col" "$((caret_col + 4))")
-        read -r lit dark <<< "$means"
-        # A frame can land mid-repaint; the most lit sample is the caret.
-        if [ "${lit:-0}" -gt "$caret_mean" ]; then
-            caret_mean=${lit:-0}
-            blank_mean=${dark:-999}
-        fi
-    done
-    # The block covers the glyph cell, not the leading between rows, so a lit
-    # cell averages well below the block colour (about 150 of 255): measured
-    # here at 96 against a blank 25. The threshold keeps those apart without
-    # demanding a full cell of ink from a block that does not fill one.
-    if [ "${caret_mean:-0}" -gt 80 ] && [ "${blank_mean:-999}" -lt 60 ]; then
-        ok "caret: the view draws a block at the input box's cursor ($caret_mean against $blank_mean)"
+    # One frame has to hold both cells: the caret's own cell lit and the cell four
+    # columns along blank. A frame caught mid-repaint does not, and the watch keeps
+    # looking for one that does - which is what five screenshots and "the most lit
+    # sample" were standing in for. The block covers the glyph cell, not the
+    # leading between rows, so a lit cell averages well below the block colour
+    # (about 150 of 255): measured here at 96 against a blank 25, which is where
+    # 80 and 60 come from.
+    local answer
+    watch_pixels caret --es cellgrid "$left,$top,$right,$bottom,$cols" \
+        --es cells "$caret_col,80,255:$((caret_col + 4)),0,60"
+    answer=$(watch_answer caret 15)
+    if printf '%s\n' "$answer" | grep -aq '^result=pass'; then
+        ok "caret: the view draws a block at the input box's cursor" \
+            "(cell $(watched "$answer" "cell.$caret_col") against" \
+            "$(watched "$answer" "cell.$((caret_col + 4))"), on frame $(watched "$answer" frame))"
     else
-        bad "caret: no block at the cursor (cell '${caret_mean:-none}', background '${blank_mean:-none}'; row '$row_text', indent '${indent:-?}', cols '$cols', cell '$caret_col', bounds '$bounds')"
+        bad "caret: no frame had a block at the cursor and a blank cell beside it" \
+            "($(watch_said "$answer"); row '$row_text', indent '${indent:-?}', cols '$cols'," \
+            "cell '$caret_col', bounds '$bounds')"
     fi
 }
 
@@ -1074,10 +1098,6 @@ test_tui_blinks_the_caret() {
     launch --ez tui true
     if ! await "BOX-TUI" 30; then
         bad "blink: the box TUI never drew"
-        return
-    fi
-    if ! command -v ffmpeg >/dev/null; then
-        say "skip blink pixels (no ffmpeg to read the screenshot)"
         return
     fi
     settled_grid 16 >/dev/null || true
@@ -1104,19 +1124,20 @@ test_tui_blinks_the_caret() {
         return
     fi
 
-    local lit=0 dark=0 i mean
-    for i in 1 2 3 4 5 6 7 8 9 10; do
-        device exec-out screencap -p > samples/out/blink.png 2>/dev/null
-        mean=$(cell_means samples/out/blink.png "$left" "$top" "$right" "$bottom" \
-            "$cols" "$caret_col")
-        if [ "${mean:-0}" -gt 120 ]; then lit=$((lit + 1)); fi
-        if [ "${mean:-999}" -lt 60 ]; then dark=$((dark + 1)); fi
-        sleep 0.2
-    done
-    if [ "$lit" -gt 0 ] && [ "$dark" -gt 0 ]; then
-        ok "blink: the box TUI's caret blinks ($lit on, $dark off in 10 samples)"
+    # Blinking is two different frames: one with the cell lit, one with it dark.
+    # Neither has to be the first, and the answer says which frame showed each,
+    # so a caret that is simply on or simply off cannot pass this.
+    local answer
+    watch_pixels blink --es cellgrid "$left,$top,$right,$bottom,$cols" \
+        --es cells "$caret_col,120,255:$caret_col,0,60" --ez across true --el waitMs 12000
+    answer=$(watch_answer blink 15)
+    if printf '%s\n' "$answer" | grep -aq '^result=pass'; then
+        ok "blink: the box TUI's caret blinks" \
+            "(cell $(watched "$answer" "met.1.cell.$caret_col") at frame $(watched "$answer" met.1.frame)," \
+            "cell $(watched "$answer" "met.2.cell.$caret_col") at frame $(watched "$answer" met.2.frame))"
     else
-        bad "blink: the caret did not blink ($lit on, $dark off in 10 samples)"
+        bad "blink: the caret did not blink in $(watched "$answer" frames) changed frame(s)" \
+            "($(watch_said "$answer"))"
     fi
 }
 
@@ -1126,33 +1147,31 @@ test_tui_blinks_the_caret() {
 # background as well as the glyph. The proof is the pixels: both fills the
 # program asked for (SGR 44 and 43) have to be on screen. Counting the whole
 # frame keeps this independent of where the IME leaves the view between the
-# dump and the screenshot.
+# dump and the frame the watch passes on.
 test_tui_background_box() {
     launch --ez background true
     if ! await "BG-TUI" 30; then
         bad "background: the TUI never drew"
         return
     fi
-    if ! command -v ffmpeg >/dev/null; then
-        say "skip background pixels (no ffmpeg to read the screenshot)"
-        return
-    fi
     settled_grid 16 >/dev/null || true
-    local tree
+    local tree answer
     tree=$(dump e2e-background)
     if ! printf '%s\n' "$tree" | grep -aqF 'yellow background'; then
         bad "background: the yellow box is not in the tree"
         return
     fi
-    local shot=samples/out/background.png blue yellow
-    device exec-out screencap -p > "$shot" 2>/dev/null
-    blue=$(color_pixels "$shot" 52 101 164 10)
-    yellow=$(color_pixels "$shot" 196 160 0 10)
-    # Each fill is tens of thousands of pixels; a missing one counts as zero.
-    if [ "${blue:-0}" -gt 20000 ] && [ "${yellow:-0}" -gt 20000 ]; then
-        ok "background: the blue and yellow fills reached the pixels ($blue, $yellow)"
+    # Each fill is tens of thousands of pixels, and the watch counts the screen
+    # the device is showing: a fill that is not there counts as nothing.
+    watch_pixels background \
+        --es colours "blue,42,62,91,111,154,174,20000:yellow,186,206,150,170,0,10,20000"
+    answer=$(watch_answer background 20)
+    if printf '%s\n' "$answer" | grep -aq '^result=pass'; then
+        ok "background: the blue and yellow fills reached the pixels" \
+            "(blue $(watched "$answer" count.blue), yellow $(watched "$answer" count.yellow)," \
+            "on frame $(watched "$answer" frame))"
     else
-        bad "background: a box fill is missing (blue '${blue:-none}', yellow '${yellow:-none}' pixels)"
+        bad "background: no frame had both box fills ($(watch_said "$answer"))"
     fi
 }
 
@@ -1340,7 +1359,7 @@ test_service_types_into_a_termux_session() {
 
 # The page was captured from its own pty at 100x30: six non-ASCII glyphs and
 # truecolor SGR only. `assets/tui-symbols.py` is the page in miniature. The rows
-# prove the parser carried every glyph; the screenshot proves a truecolor
+# prove the parser carried every glyph; the pixels prove a truecolor
 # background reached the cells, which the row text cannot show.
 test_entry_page_symbols() {
     launch --ez symbols true
@@ -1365,19 +1384,19 @@ test_entry_page_symbols() {
     else
         bad "symbols: the composer text is missing"
     fi
-    if ! command -v ffmpeg >/dev/null; then
-        say "skip symbols pixels (no ffmpeg to read the screenshot)"
-        return
-    fi
     settled_grid 16 >/dev/null || true
-    local shot=samples/out/symbols.png canvas panel
-    device exec-out screencap -p > "$shot" 2>/dev/null
-    canvas=$(color_pixels "$shot" 10 10 10 6)   # #0A0A0A, the page's canvas
-    panel=$(color_pixels "$shot" 30 30 30 6)    # #1E1E1E, the composer
-    if [ "${canvas:-0}" -gt 20000 ] && [ "${panel:-0}" -gt 10000 ]; then
-        ok "symbols: the page's truecolor fills reached the pixels ($canvas, $panel)"
+    local answer
+    # #0A0A0A is the page's canvas and #1E1E1E its composer: two truecolors the
+    # row text cannot show, counted where they are drawn.
+    watch_pixels symbols \
+        --es colours "canvas,4,16,4,16,4,16,20000:panel,24,36,24,36,24,36,10000"
+    answer=$(watch_answer symbols 20)
+    if printf '%s\n' "$answer" | grep -aq '^result=pass'; then
+        ok "symbols: the page's truecolor fills reached the pixels" \
+            "(canvas $(watched "$answer" count.canvas), panel $(watched "$answer" count.panel)," \
+            "on frame $(watched "$answer" frame))"
     else
-        bad "symbols: a truecolor fill is missing (canvas '${canvas:-none}', panel '${panel:-none}')"
+        bad "symbols: no frame had both truecolor fills ($(watch_said "$answer"))"
     fi
     if type_until "q" "symbols tui left the alternate screen"; then
         ok "symbols: 'q' left the alternate screen"
@@ -1769,6 +1788,12 @@ if ! recover_previous_run; then
 fi
 
 install_everything
+if [ "$STREAM" = 1 ] && ! start_stream; then
+    say "FAIL the screen stream did not start ($(probe_file stream | tr '\n' ' '))"
+    FAIL=1
+    record_run
+    exit 1
+fi
 start_recording
 check cursor test_cursor_jumps
 check cursor-escapes test_cursor_escapes_from_a_program

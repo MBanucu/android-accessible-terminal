@@ -34,7 +34,9 @@ clock and this machine's: the suite logs `event` on this side, the frames are
 timed on that side. It is sampled twice, half a round trip each way, and the
 spread between the samples is reported as the accuracy of the mapping. A round
 trip is tens of milliseconds; a frame is 33 ms at 30 fps, and the sidecar says
-which of the two dominated.
+which of the two dominated. An event that already carries a device time
+(`--data device_ns=...`, as the pixel watch's do) skips the offset altogether:
+its frame is on the recording's own clock, and `timed: device` says so.
 
 Where the device predates the metadata track (Android 12 and older screenrecord),
 `stop` falls back to the offset from the recording's own start and says so; the
@@ -368,10 +370,25 @@ def map_events(directory, sidecar):
         except ValueError:
             continue
         mapped = {"name": event.get("name"), "host": event.get("host")}
-        if event.get("data"):
-            mapped["data"] = event["data"]
-        if frames and "offset" in sync:
+        data = event.get("data") or {}
+        if data:
+            mapped["data"] = data
+        device_ns = None
+        from_host = False
+        if data.get("device_ns"):
+            # A moment the device timed itself is already on the clock the frames
+            # are timed by, so it needs no offset and is not made worse by one.
+            # The pixel watch is this case: it passes on a frame of the screen it
+            # took, which the recording has its own timestamp for.
+            try:
+                device_ns = float(data["device_ns"])
+            except (TypeError, ValueError):
+                device_ns = None
+        if device_ns is None and frames and "offset" in sync:
             device_ns = (event["host"] + sync["offset"]) * 1e9
+            from_host = True
+        if frames and device_ns is not None:
+            mapped["timed"] = "host" if from_host else "device"
             at = 0
             for index, stamp in enumerate(frames):
                 if stamp <= device_ns:

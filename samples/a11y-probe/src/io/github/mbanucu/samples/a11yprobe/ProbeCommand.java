@@ -12,10 +12,14 @@ import android.widget.Toast;
  * <pre>
  * am broadcast -a io.github.mbanucu.samples.a11yprobe.COMMAND \
  *     --es dump tree --es find "$ " --es text "echo hi"
+ * am broadcast -a io.github.mbanucu.samples.a11yprobe.COMMAND --es pkg APP \
+ *     --es pixels colour --es region 0,150,1440,900 \
+ *     --es colours "red,150,255,0,109,0,109,200"
  * </pre>
  *
  * {@code dump} names the file, {@code find} picks the node, {@code text} is what
- * SET_TEXT types. Answer goes to files/actions.txt and to the log.
+ * SET_TEXT types, {@code pixels} starts a pixel watch that answers in its own
+ * file. Answers go to files/actions.txt and to the log.
  */
 public final class ProbeCommand extends BroadcastReceiver {
 
@@ -31,6 +35,7 @@ public final class ProbeCommand extends BroadcastReceiver {
         String dump = intent.getStringExtra("dump");
         String inspect = intent.getStringExtra("inspect");
         String wait = intent.getStringExtra("wait");
+        String pixels = intent.getStringExtra("pixels");
         boolean focusRow = intent.getBooleanExtra("focusRow", false);
         String eventType = intent.getStringExtra("event");
         long waitMs = intent.getLongExtra("waitMs", 5000);
@@ -40,7 +45,17 @@ public final class ProbeCommand extends BroadcastReceiver {
         }
         ProbeService.setTarget(intent.getStringExtra("pkg"));
         final String result;
-        if (inspect != null) {
+        if (pixels != null) {
+            // The screenshots, the frame numbering and the counting all happen on
+            // this side; the test only polls the file this answers in.
+            result = PixelWatch.start(ProbeService.instance, pixels,
+                    intent.getStringExtra("region"),
+                    intent.getStringExtra("colours"),
+                    intent.getStringExtra("cellgrid"),
+                    intent.getStringExtra("cells"),
+                    intent.getBooleanExtra("across", false),
+                    intent.getLongExtra("waitMs", 15000));
+        } else if (inspect != null) {
             result = ProbeService.inspect(inspect);
         } else if (focusRow) {
             result = ProbeService.focusFirstRow();

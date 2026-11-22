@@ -426,6 +426,100 @@ public final class ProbeService extends AccessibilityService {
         targetPackage = packageName;
     }
 
+    /** The package actions are aimed at, or null for whatever window is in front. */
+    static String targetPackage() {
+        return targetPackage;
+    }
+
+    /**
+     * Accepts the system's screen-capture dialog, the way a screen reader user
+     * would.
+     *
+     * <p>Screen capture is not a permission an app can hold: the system shows a
+     * dialog every time, and only a person - or something standing in for one -
+     * can accept it. That standing-in is this service. {@code StreamActivity} asks
+     * for the capture and calls this; the dialog is another window, so the service
+     * looks for its positive button in the system UI and clicks it, and says in
+     * actions.txt what it clicked.
+     */
+    static void acceptScreenCaptureDialog() {
+        final ProbeService service = instance;
+        if (service == null) {
+            write("actions.txt", "STREAM no probe service to accept the capture dialog\n");
+            return;
+        }
+        new Thread(() -> {
+            long deadline = android.os.SystemClock.uptimeMillis() + 8000;
+            while (android.os.SystemClock.uptimeMillis() < deadline) {
+                String clicked = service.clickCaptureButton();
+                if (clicked != null) {
+                    write("actions.txt", "STREAM accepted the screen capture dialog: "
+                            + clicked + "\n");
+                    return;
+                }
+                try {
+                    Thread.sleep(150);
+                } catch (InterruptedException interrupted) {
+                    return;
+                }
+            }
+            write("actions.txt", "STREAM the screen capture dialog never appeared\n");
+        }, "screen-capture-consent").start();
+    }
+
+    /** The positive button of the capture dialog, clicked; null while there is none. */
+    private String clickCaptureButton() {
+        List<AccessibilityWindowInfo> windows = getWindows();
+        if (windows == null) {
+            return null;
+        }
+        for (AccessibilityWindowInfo window : windows) {
+            AccessibilityNodeInfo root = window.getRoot();
+            if (root == null) {
+                continue;
+            }
+            String pkg = String.valueOf(root.getPackageName());
+            // The dialog belongs to the system, so this never clicks an app's own
+            // "start" button: only the system UI's windows are searched.
+            if (!pkg.startsWith("com.android.systemui") && !pkg.equals("android")) {
+                continue;
+            }
+            AccessibilityNodeInfo button = captureButton(root);
+            if (button != null) {
+                boolean clicked = button.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                String answer = quote(button.getText()) + " id=" + button.getViewIdResourceName()
+                        + " clickable=" + button.isClickable();
+                return clicked ? answer : null;
+            }
+        }
+        return null;
+    }
+
+    private static AccessibilityNodeInfo captureButton(AccessibilityNodeInfo node) {
+        Deque<AccessibilityNodeInfo> pending = new ArrayDeque<>();
+        pending.add(node);
+        AccessibilityNodeInfo fallback = null;
+        while (!pending.isEmpty()) {
+            AccessibilityNodeInfo current = pending.removeFirst();
+            if (current.isClickable()) {
+                String text = String.valueOf(current.getText()).toLowerCase();
+                if (text.contains("start") || text.contains("allow") || text.contains("share")) {
+                    return current;
+                }
+                if (fallback == null && "android:id/button1".equals(current.getViewIdResourceName())) {
+                    fallback = current;
+                }
+            }
+            for (int i = 0; i < current.getChildCount(); i++) {
+                AccessibilityNodeInfo child = current.getChild(i);
+                if (child != null) {
+                    pending.addLast(child);
+                }
+            }
+        }
+        return fallback;
+    }
+
     /**
      * The root of the target package's window, or of the active window when no
      * target was given.

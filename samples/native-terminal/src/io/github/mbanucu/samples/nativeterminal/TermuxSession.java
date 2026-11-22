@@ -117,7 +117,17 @@ final class TermuxSession {
                     + "{ [ -n \"$p\" ] && [ -n \"$wr\" ]; } || continue; "
                     + "stty -F \"$p\" cols \"$wc\" rows \"$wr\" 2>/dev/null "
                     + "|| stty cols \"$wc\" rows \"$wr\" < \"$p\" 2>/dev/null; "
-                    + "done ) 2>/dev/null & watch=$!; trap 'kill $watch 2>/dev/null' EXIT; ";
+                    + "done; "
+                    // The control socket closing means the app is gone. Hang up
+                    // the pty, which is what closing a terminal window does: the
+                    // shell and the program inside it get SIGHUP and exit, so
+                    // the session ends instead of waiting on a reader that no
+                    // longer exists. SIGKILL follows for anything that traps
+                    // SIGHUP, and does nothing once the pty is already gone.
+                    + "t=$(cat " + TTY_FILE + " 2>/dev/null); "
+                    + "[ -n \"$t\" ] && { pkill -HUP -t \"${t#/dev/}\" 2>/dev/null; "
+                    + "sleep 1; pkill -KILL -t \"${t#/dev/}\" 2>/dev/null; }; "
+                    + ") 2>/dev/null & watch=$!; trap 'kill $watch 2>/dev/null' EXIT; ";
         }
         // `tty` writes the device name to the file itself, so no $(...) and no
         // escaping to get wrong; the size is set from inside the pty because only

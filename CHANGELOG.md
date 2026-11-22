@@ -8,6 +8,15 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- A sample's Termux session ends when the app does: the wrapper hangs up the
+  pty once its control socket closes, instead of leaving the pty helper, a
+  shell and the program behind. Android counts those against a 32-process
+  limit and kills every process the terminal owns when it is reached.
+- The e2e suite reaps any session leftovers after each check, including the
+  ones a failed launch leaves with no control socket to report to.
+
 ### Changed
 
 - Releases publish automatically once the Central Portal validates the bundle

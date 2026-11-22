@@ -530,7 +530,44 @@ dump() {
         --es dump '$1' >/dev/null 2>&1; cat $PROBE_FILES/$1.txt" 2>/dev/null
 }
 
+# Kills a process and everything under it. A plain kill is not enough for a
+# session: `script` puts the shell it runs into a new session, so killing the
+# wrapper leaves that shell, its program and the pty helper running.
+kill_tree() {
+    local kid
+    for kid in $(ps -eo pid,ppid 2>/dev/null | awk -v p="$1" '$2 == p { print $1 }'); do
+        kill_tree "$kid"
+    done
+    kill -9 "$1" 2>/dev/null
+}
+
+# The Termux side of an inline session outlives the app that started it: a
+# force-stop kills this app, not the `bash -lc` wrapper Termux ran for it, and
+# that wrapper holds `script`, a shell and the program open forever because
+# nothing ever closes the pty. Every check that opens a session leaves five
+# such processes behind. Android allows 32 processes per uid for an app like
+# Termux and then kills all of them at once - logged as "Trimming phantom
+# processes" - which is how a full run ends up killing the terminal that is
+# running it. Reap after each check so the count cannot creep.
+reap_sessions() {
+    local pid
+    for pid in $(ps -eo pid,args 2>/dev/null \
+            | awk '/native-terminal\/pty/ && !/awk/ { print $1 }'); do
+        kill_tree "$pid"
+    done
+    # A launch that failed before the app connected its control socket leaves a
+    # session with nothing to report the hangup to: its pty is not the one in
+    # the file, so the wrapper's own teardown names a terminal that no longer
+    # exists. What survives is the page program, reparented and still drawing
+    # into a pty nobody reads.
+    for pid in $(ps -eo pid,args 2>/dev/null \
+            | awk '$2 == "python3" && $3 == "-c" && $4 == "import" { print $1 }'); do
+        kill_tree "$pid"
+    done
+}
+
 restore() {
+    reap_sessions
     if [ "$STATE_SAVED" = 1 ]; then
         put_device_back || say "WARNING: the device is still changed;" \
             "run 'bash samples/e2e.sh --restore' when it is reachable"
@@ -1287,6 +1324,7 @@ check() {
     local started=$SECONDS before=$FAIL_COUNT seconds
     CHECKS_RUN=$((CHECKS_RUN + 1))
     "$@"
+    reap_sessions
     seconds=$((SECONDS - started))
     say "  ($name: ${seconds}s)"
     # The log line test/timings.py already knows: class#test duration outcome.

@@ -57,6 +57,29 @@ the DejaVu Sans Mono the samples ship — and falls back to the system monospace
 when it is not. A sample copy is in
 [`samples/native-terminal/assets/`](samples/native-terminal/assets).
 
+## Building from source
+
+`bash terminal/test.sh` runs the JVM suites with nothing but a `javac` — no SDK,
+no Gradle, no device.
+
+`bash samples/build.sh all` builds both demo apps with the SDK's tools and no
+Gradle, and `bash samples/e2e.sh` drives them on a connected device.
+
+The Gradle build needs an Android SDK (`ANDROID_HOME`, `ANDROID_SDK_ROOT` or
+`sdk.dir` in `local.properties`) and JDK 17. On an aarch64 host, such as Termux,
+AGP's bundled `aapt2` has no usable build, so point it at the system one:
+
+```bash
+export ANDROID_HOME=$HOME/android-sdk
+./gradlew -Pandroid.aapt2FromMavenOverride=$PREFIX/bin/aapt2 assembleRelease
+```
+
+Or put `android.aapt2FromMavenOverride=$PREFIX/bin/aapt2` in
+`~/.gradle/gradle.properties` once and drop the flag. A CI machine is x86_64 and
+needs neither. `assembleRelease` writes the unsigned AAR to
+`build/outputs/aar/`; `nmcpZipAggregation` writes the signed-for-release bundle
+only when `SIGNING_KEY` is set, so a local build needs no secrets.
+
 Alternatively, compile the sources directly, which is what the sample apps do
 and what works on an aarch64 host where Gradle's `aapt2` has no build:
 

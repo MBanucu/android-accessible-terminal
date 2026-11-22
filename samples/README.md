@@ -210,8 +210,11 @@ number is the offset between this machine's clock and the device's, sampled at t
 start and the end; on this phone the samples agree to 2-8 ms with a 20-28 ms round
 trip, a frame being 33 ms at 30 fps.
 
-A recording costs about 19 s on a 121 s suite: 13 s spread over the checks, where
-the encoder shares the device's CPU, and 6 s at the end pulling twenty megabytes.
+The video stays on the device (`/data/local/tmp/suite-capture.mp4`) until the run
+is over: `stop` interrupts the recorder, waits for it to exit so the file is
+finalized, and only then pulls it — 21 MB in about 0.2 s over adb. A whole `stop`
+is about 1.4 s. A recording costs about 19 s on a 121 s suite, and 13 s of that is
+traced to individual checks, where the encoder shares the device's CPU;
 `--no-record` is the fast path for a run that only needs the verdict.
 
 ### What a run prints

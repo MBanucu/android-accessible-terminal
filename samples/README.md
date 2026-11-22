@@ -203,15 +203,16 @@ monotonic presentation time of every frame into a metadata track beside the vide
 and pairs it with the container's pts. An event becomes the last frame presented
 at or before it, which is the picture that was on screen. Nothing is assumed
 about the frame rate: `screenrecord` writes a frame only when the screen changes,
-so a still screen is a long gap and not a missing frame. The one measured number
-is the offset between this machine's clock and the device's, sampled at the start
-and the end; on this phone the samples agree to 5-8 ms with a 26-28 ms round trip,
-a frame being 33 ms at 30 fps.
+so a still screen is a long gap and not a missing frame. The video is kept exactly
+as `screenrecord` wrote it: its metadata track carries the frame times, so the
+recording explains its own timing and nothing has to be remuxed. The one measured
+number is the offset between this machine's clock and the device's, sampled at the
+start and the end; on this phone the samples agree to 2-8 ms with a 20-28 ms round
+trip, a frame being 33 ms at 30 fps.
 
 A recording costs about 19 s on a 121 s suite: 13 s spread over the checks, where
-the encoder shares the device's CPU, and 6 s at the end pulling and remuxing
-twenty megabytes. `--no-record` is the fast path for a run that only needs the
-verdict.
+the encoder shares the device's CPU, and 6 s at the end pulling twenty megabytes.
+`--no-record` is the fast path for a run that only needs the verdict.
 
 ### What a run prints
 

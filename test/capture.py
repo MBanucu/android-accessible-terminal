@@ -306,25 +306,11 @@ def cmd_stop(args):
     if pull.returncode != 0:
         sys.exit("capture: could not pull the recording: %s" % pull.stderr.strip())
     device_shell("rm -f %s" % state["remote"], serial)
-    # Before the remux, because ffmpeg's MP4 muxer cannot write screenrecord's
-    # `meta` handler tracks and drops them: the frame times have to be read out
-    # of the file screenrecord closed.
+    # The file screenrecord closes is used as it is. It already keeps `moov`
+    # before `mdat`, so seeking it is a seek, and its metadata track carries the
+    # per-frame times: remuxing it through ffmpeg would drop that track and make
+    # the recording stop explaining itself.
     meta = parse_metadata(recording)
-    # A file written by screenrecord plays but cannot be seeked until something
-    # closes it: remuxing with faststart is what makes `frames` a seek, not a
-    # decode from the beginning.
-    fixed = recording + ".fixed.mp4"
-    remux = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", recording,
-         "-c", "copy", "-movflags", "+faststart", fixed], capture_output=True)
-    if remux.returncode == 0 and os.path.getsize(fixed) > 0:
-        os.replace(fixed, recording)
-    else:
-        say = "capture: could not remux; frames will still decode from the start"
-        print(say)
-        if os.path.exists(fixed):
-            os.remove(fixed)
-
     pts = container_pts(recording)
     sidecar = {"recording": os.path.basename(recording),
                "size": os.path.getsize(recording),
@@ -353,8 +339,8 @@ def cmd_stop(args):
                 max(offsets) - min(offsets)) / 2.0
             sidecar["sync"]["round_trip_ms"] = 1000.0 * sum(errors) / len(errors)
         if pts and len(pts) != len(meta["frames"]):
-            # The remux keeps every video frame but numbers them its own way; a
-            # count that differs means an index would point at the wrong picture.
+            # A count that differs means an index would point at the wrong
+            # picture; the timestamps are still good for --at.
             print("capture: %d frames in the container, %d in the metadata: "
                   "events keep their frame index, and --at still works"
                   % (len(pts), len(meta["frames"])))

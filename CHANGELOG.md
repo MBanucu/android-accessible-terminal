@@ -98,19 +98,25 @@ and this project adheres to
 
 ### Changed
 
-- The tools that drive the device — `adb-connect.py` (the mDNS lookup for the
-  wireless-debugging port), `adb-watch.sh` (the loop that reconnects) and
-  `capture.py` (the recording and the frame for an event) — are their own
-  repository, [`adb-harness`](https://github.com/MBanucu/adb-harness), so a
-  project that tests something else on a phone can use them without taking this
-  suite along. `test/harness.sh` fetches the release pinned by version and
-  sha256 into `test/.deps/harness/` and runs it as `capture`, `connect` or
-  `watch` (`HARNESS_VERSION` pins the version, `HARNESS_SRC` runs a checkout
-  instead). The tools behave as they did here: the watcher's pid and log stay in
-  `test/out/` through `ADB_WATCH_OUT`. The names call sites use are
-  one step longer for it — `bash test/harness.sh capture show` rather than
-  `python3 test/capture.py show` — and there is no other change: a full recorded
-  run passes, mapping all 52 of its events to frames.
+- The tools that drive the device — `adb-connect` (the mDNS lookup for the
+  wireless-debugging port), `adb-watch` (the loop that reconnects) and `capture`
+  (the recording and the frame for an event) — are their own project,
+  [`adb-harness`](https://github.com/MBanucu/adb-harness), published to PyPI as
+  `adb-harness`, so a project that tests something else on a phone can
+  `pip install` them without taking this suite along. `test/harness.sh` installs
+  the pinned release into `test/.deps/venv` the first time it is needed and runs
+  its commands from then on, as `capture`, `connect` or `watch`
+  (`HARNESS_VERSION` pins the version, `HARNESS_SRC` runs a checkout instead), so
+  this suite uses the package the way any other project does. The watcher's pid
+  and log stay in `test/out/` through `ADB_WATCH_OUT`, and `kill "$(cat
+  test/out/adb-watch.pid)"` now actually stops it — the old script's signal
+  handler removed the pidfile and kept looping, which is fixed in 0.2.1. The
+  names call sites use are one step longer — `bash test/harness.sh capture show`
+  rather than `python3 test/capture.py show`. A full recorded run passes through
+  the installed package, mapping all 52 of its events to frames.
+- `adb-harness` ships `python-zeroconf` as the `mdns` extra rather than a
+  dependency: only `adb-connect` needs it, and `capture` and the watcher work
+  without it. This suite installs `adb-harness[mdns]` because it needs all three.
 - The timing store — the ETA line, the per-check history and the regression gate —
   is its own project, `MBanucu/test-timings`, published to PyPI as
   `test-timings`, so a suite that is not this one can `pip install` it.

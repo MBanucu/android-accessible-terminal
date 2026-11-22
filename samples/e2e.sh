@@ -414,10 +414,13 @@ grid_changed() {
 # pty follows the last of them: reading the first is how a check comes to expect
 # a size the program never ends up with.
 settled_grid() {
-    local first second tries=${1:-10} i=0
+    local first second tries=${1:-20} i=0
     first=$(last_grid)
     while [ "$i" -lt "$tries" ]; do
-        sleep 0.5
+        # The grid change was already witnessed before this is called, so the
+        # second read follows the first closely; 0.5 s only found the view having
+        # stopped one read later anyway, while a resize can still be landing.
+        sleep 0.25
         second=$(last_grid)
         if [ "$second" = "$first" ]; then
             printf '%s' "$second"
@@ -940,7 +943,7 @@ test_tui_caret_is_visible() {
     # The row's own bounds are the cell geometry: a column is the view's width
     # over the grid's. Waiting for the grid to settle first keeps a keyboard that
     # is still opening from moving the row between the dump and the screenshot.
-    settled_grid 8 >/dev/null || true
+    settled_grid 16 >/dev/null || true
     local tree row_line row_text bounds left top right bottom cols caret_col
     tree=$(dump e2e-caret)
     row_line=$(printf '%s\n' "$tree" | grep -aF '|  > ' | head -1)
@@ -1000,7 +1003,7 @@ test_tui_blinks_the_caret() {
         say "skip blink pixels (no ffmpeg to read the screenshot)"
         return
     fi
-    settled_grid 8 >/dev/null || true
+    settled_grid 16 >/dev/null || true
     local tree row_line row_text bounds left top right bottom cols indent caret_col
     tree=$(dump e2e-blink)
     # The prompt row is the one whose text is " >" - the '>' sits in column 1,
@@ -1057,7 +1060,7 @@ test_tui_background_box() {
         say "skip background pixels (no ffmpeg to read the screenshot)"
         return
     fi
-    settled_grid 8 >/dev/null || true
+    settled_grid 16 >/dev/null || true
     local tree
     tree=$(dump e2e-background)
     if ! printf '%s\n' "$tree" | grep -aqF 'yellow background'; then
@@ -1083,7 +1086,11 @@ test_cursor_escapes_from_a_program() {
         bad "cursor: no shell to print the escapes"
         return
     fi
-    sleep 4
+    # The app's own probes end with `echo still-alive; stty size`, half a second
+    # after the line above. Waiting for that answer instead of sleeping 4 s is
+    # what keeps a probe from being typed between this check's printf and its
+    # Enter: they share the pty, and two submits landing together interleave.
+    await "still-alive" 6
     # `printf` is the program; the CUP sequences are its output. Clear first, so
     # the rows the jumps land on hold nothing but what the program put there.
     if type_in_app "printf \"\\033[2J\\033[10;3HPTY-JUMP\\033[3;40HROW-JUMP\"" \
@@ -1138,6 +1145,11 @@ test_session_resize_follows_the_view() {
     launch --ez termux true --ez sizeProbes false
     if ! await "termux:connected:true" 20; then
         bad "session resize: Termux never connected back"
+        return
+    fi
+    # Same socket as the app's demo: type once the demo's last line is answered.
+    if ! await "termux:after-ticks" 20; then
+        bad "session resize: the demo's output never finished"
         return
     fi
     # Asked through the service, not by a timed probe: a fixed number of probes
@@ -1220,6 +1232,13 @@ test_service_types_into_a_termux_session() {
         return
     fi
     ok "session: Termux connected and the view is receiving its output"
+    # The app's own demo lines go to the same socket; typing before its last one
+    # (three ticks, answered in about three seconds) is what made the service's
+    # line lose a race and need a second attempt.
+    if ! await "termux:after-ticks" 20; then
+        bad "session: the demo's output never finished"
+        return
+    fi
 
     local token="E2E-$$-$RANDOM"
     # The action a screen reader or Voice Access performs; the trailing newline
@@ -1273,7 +1292,7 @@ test_entry_page_symbols() {
         say "skip symbols pixels (no ffmpeg to read the screenshot)"
         return
     fi
-    settled_grid 8 >/dev/null || true
+    settled_grid 16 >/dev/null || true
     local shot=samples/out/symbols.png canvas panel
     device exec-out screencap -p > "$shot" 2>/dev/null
     canvas=$(color_pixels "$shot" 10 10 10 6)   # #0A0A0A, the page's canvas
@@ -1690,6 +1709,23 @@ check resize test_grid_resize_reaches_the_pty
 check rows test_rows_and_events
 check session test_service_types_into_a_termux_session
 check session-resize test_session_resize_follows_the_view
+
+# The regression gate: a check that still passes but took much longer than its
+# own recent median is the slowdown this suite exists to notice quickly, and CI
+# fails on it rather than on a reading of the log afterwards. Not for `--only`:
+# a partial run is compared with the same checks in full runs otherwise, and
+# the install shapes the first check of a subset differently.
+if [ "$FAIL" = 0 ] && [ -z "$ONLY" ]; then
+    if ! gate=$(python3 "$here/../test/timings.py" check --class samples.e2e \
+            --log "$TIMING_LOG" --run "$RUN_STARTED" \
+            --db "$here/../test/.timings.db" 2>&1); then
+        printf '%s\n' "$gate" | sed 's/^/  /'
+        FAIL=1
+    else
+        printf '  %s\n' "$gate"
+    fi
+fi
+
 if [ "$FAIL" = 0 ]; then
     say "PASS $CHECKS_RUN checks in $((SECONDS - START))s"
     record_run

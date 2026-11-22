@@ -27,6 +27,13 @@ in progress and what counts a test the history has not seen yet.
         --log run.log --order "pty tui session" --started 1699999990
     python3 test/timings.py history [--class <class>]
     python3 test/timings.py steps   [--run 1699999999]
+    python3 test/timings.py check   --log run.log --run 1699999999
+
+`check` is the regression gate: every test in the log whose median is long
+enough to judge has to have finished within `--max-regression` percent of it,
+and the command exits 1 naming the ones that did not. Tests under `--min-ms`
+are not judged - a two-second test moving by four hundred milliseconds is the
+phone, not the code - and tests with no history are passed over.
 
 The database defaults to test/.timings.db beside this script and can be queried
 with any SQLite client.
@@ -230,6 +237,61 @@ def report_history(args):
     return 0
 
 
+def log_timings(path):
+    """The (class, test, millis, outcome) rows a log holds, in order."""
+    found = []
+    if not path or not os.path.isfile(path):
+        return found
+    with open(path, errors="replace") as stream:
+        for line in stream:
+            match = LINE.search(line)
+            if match:
+                found.append((match.group(1), match.group(2),
+                              int(match.group(3)), match.group(4)))
+    return found
+
+
+def report_check(args):
+    """Fails when a test took much longer than its own recent median.
+
+    The log is read, not ingested: the run being judged has to be compared with
+    what the suite cost before it, and a database that already held this run
+    would move the median towards the very number under test.
+    """
+    db = connect(args.db)
+    current = [row for row in log_timings(args.log)
+               if not args.class_ or row[0] == args.class_]
+    if not current:
+        print("regression: no timings in %s" % (args.log or "the log"))
+        return 1
+    judged = 0
+    slower = []
+    for room, test, millis, _outcome in current:
+        past = [row[0] for row in db.execute(
+            "SELECT millis FROM timings WHERE class = ? AND test = ? AND run <> ?"
+            " ORDER BY id DESC LIMIT ?", (room, test, args.run, RECENT_RUNS))]
+        baseline = median_of(past)
+        if not baseline or baseline < args.min_ms:
+            continue
+        judged += 1
+        # Percent alone is not a gate on a phone: this suite's own history has
+        # pty-flags between 2 s and 6 s and tui-symbols between 8 s and 13 s, so
+        # 20% of a four-second check is less than the same check's jitter. The
+        # slack is added to the allowance and is loud in the message.
+        allowed = baseline * (100 + args.max_regression) / 100.0 + args.slack_ms
+        if millis > allowed:
+            slower.append((test, millis, baseline, allowed))
+    if slower:
+        for test, millis, baseline, allowed in slower:
+            print("regression: %s %s, median %s, allowed %s (%+.0f%%)"
+                  % (test, seconds(millis), seconds(baseline), seconds(allowed),
+                     100.0 * (millis - baseline) / baseline))
+        return 1
+    print("regression: %d check(s) within %d%% of their median (%d not judged)"
+          % (judged, args.max_regression, len(current) - judged))
+    return 0
+
+
 def report_steps(args):
     """Where the time inside each test of one run went."""
     db = connect(args.db)
@@ -294,6 +356,19 @@ def main(argv):
     eta.add_argument("--elapsed", type=int, default=None,
                      help="seconds the run has spent so far")
     eta.set_defaults(handler=report_eta)
+
+    check = sub.add_parser("check", parents=[common],
+                           help="fail when a test is much slower than its median")
+    check.add_argument("--class", dest="class_", default="")
+    check.add_argument("--log", required=True)
+    check.add_argument("--run", required=True)
+    check.add_argument("--max-regression", type=float, default=20.0,
+                       help="percent slower than the median that fails")
+    check.add_argument("--min-ms", type=int, default=3000,
+                       help="medians below this are too short to judge")
+    check.add_argument("--slack-ms", type=int, default=2000,
+                       help="added to the allowance, so jitter does not fail")
+    check.set_defaults(handler=report_check)
 
     history = sub.add_parser("history", parents=[common],
                              help="per-test durations recorded so far")

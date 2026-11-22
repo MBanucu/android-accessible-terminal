@@ -49,3 +49,39 @@ jobs:
       # The bundle the release workflow uploads, built without credentials: this
       # catches a missing sources or javadoc jar before a tag does.
       - run: ./gradlew --no-daemon nmcpZipAggregation
+
+  e2e:
+    name: e2e suite (device)
+    # The suite drives a real phone: adb, an accessibility service, a pty and a
+    # Termux session. GitHub's hosted runners have none of those, so this runs on
+    # a self-hosted runner labelled `android-device` with the device plugged in
+    # and Termux installed. Without such a runner the job would queue until it
+    # timed out on every push, so it is off unless the repository sets the
+    # E2E_DEVICE variable to true.
+    if: vars.E2E_DEVICE == 'true'
+    runs-on: [self-hosted, android-device]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      # The gate compares this run with the last few, so the runner keeps the
+      # database between runs; a key per run and a prefix to restore from is what
+      # makes each run both save its own and start from the previous one.
+      - uses: actions/cache@v4
+        with:
+          path: test/.timings.db
+          key: timings-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: timings-${{ github.ref_name }}-
+      - name: Build the sample and run the suite
+        shell: bash
+        run: |
+          set -o pipefail
+          bash samples/build.sh native-terminal
+          # The suite exits 1 on a failing check and on a check that took more
+          # than 20% longer than its own median (test/timings.py check).
+          bash samples/e2e.sh 2>&1 | tee samples/out/e2e-last.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-log
+          path: samples/out/e2e-last.log
+          if-no-files-found: warn

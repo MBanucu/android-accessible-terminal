@@ -178,3 +178,16 @@ The suite enables the probe service for the run and restores the accessibility
 settings afterwards, even when a check fails. It never changes the display size:
 a window is resized through the app itself. A dropped wireless-debugging session
 is not a failing check — `../test/adb-connect.py` asks mDNS for the current port.
+
+A full run prints a progress line with an estimate after every check:
+
+```
+  eta: 7/23 done, 1m02s spent, 2m05s left, 3m07s total, now tui-bg, finish 14:32:05
+```
+
+and ends with the regression gate: every check has to finish within 20% and two
+seconds of the median of its last five runs (`python3 test/timings.py check`). A
+shorter median than three seconds is not judged, because a two-second check on a
+phone moves by more than 20% on its own. The gate is why a run can fail with
+every `ok` line in place — that is a slowdown, not a broken check, and the line
+names the check, its time and the allowance it broke.

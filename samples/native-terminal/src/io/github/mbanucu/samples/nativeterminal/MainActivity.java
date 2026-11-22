@@ -456,6 +456,25 @@ public final class MainActivity extends Activity {
     }
 
     /**
+     * Waits until the view's screen holds `needle`, up to `millis`.
+     *
+     * <p>The session's own answer is the signal, so the demo's next line follows
+     * the one it depends on instead of a guessed delay. The delays this replaces
+     * were 1.5 s, 1.2 s and 4.5 s of the session checks' time, and the last of
+     * them was still guessing: three ticks arrive in about three seconds.
+     */
+    private boolean awaitScreenText(String needle, long millis) {
+        long deadline = System.currentTimeMillis() + millis;
+        while (System.currentTimeMillis() < deadline) {
+            if (terminal != null && terminal.screenText().contains(needle)) {
+                return true;
+            }
+            sleep(100);
+        }
+        return false;
+    }
+
+    /**
      * Waits for the session's first output, up to two seconds.
      *
      * <p>This is what the fixed 1.5 s stood in for: an interactive shell prints
@@ -795,13 +814,13 @@ public final class MainActivity extends Activity {
             // What the session thinks it is, answered by the session itself.
             submit("tty; [ -t 0 ] && echo session-stdin-is-tty; "
                     + "[ -t 1 ] && echo session-stdout-is-tty; echo size=$(stty size)");
-            sleep(1500);
+            awaitScreenText("session-stdout-is-tty", 5000);
             submit("echo TERMUX-SESSION-OK");
-            sleep(1200);
+            awaitScreenText("TERMUX-SESSION-OK", 5000);
             // Output arriving with nobody typing: the case a screen reader has
             // to hear about while the user sits still.
             submit("for i in 1 2 3; do echo TICK-$i; sleep 1; done");
-            sleep(4500);
+            awaitScreenText("TICK-3", 8000);
             writeEvidence("termux:after-ticks");
             // Keeps asking the session what size it has, so a resize from the
             // app side is visible in the evidence as a changed answer - and keeps

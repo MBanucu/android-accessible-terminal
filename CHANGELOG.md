@@ -21,6 +21,13 @@ and this project adheres to
 - The same three lines into a curses form that repaints ten times a second, so
   fast typing is checked while output is arriving rather than only into a
   program sitting in `getch`.
+- A regression gate at the end of a full run: every check has to finish within
+  20% and two seconds of the median of its last five runs, and a check with a
+  median under three seconds is not judged. `test/timings.py check` does the
+  comparing; the suite exits 1 and names the check, its time and the allowance
+  it broke. The CI workflow grows an `e2e` job for it on a self-hosted
+  `android-device` runner, off unless the repository sets `E2E_DEVICE=true`,
+  because no hosted runner has a phone, an accessibility service and Termux.
 - A progress and ETA line after every check: how many checks are done, what the
   run has spent, what is left and when it should finish, from
   `test/timings.py eta`. The estimate now counts the run's wall clock (so the
@@ -29,12 +36,20 @@ and this project adheres to
 
 ### Changed
 
-- The e2e suite takes about a third less time: 194 s down to 123 s for the 23
+- The e2e suite takes about a third less time: 194 s down to 121 s for the 23
   checks. The startup gate reads the probe's window count instead of dumping
   every window tree (32 s of the run), a launch is one adb call instead of
   four, a check asks for a screen snapshot instead of sleeping until the next
   periodic one, and a TUI is started as soon as its shell prompt arrives
   rather than after a fixed 1.5 s.
+- What is left of the fixed waits is spent on answers rather than seconds. The
+  app's Termux demo no longer sleeps 1.5 s, 1.2 s and 4.5 s between its lines:
+  each line waits for the session's own answer to the one before. The session
+  checks type once the demo's last line is answered, instead of racing it and
+  retrying. The 4 s before a program's escapes is a wait for the app's last
+  probe, and the grid settle polls at 0.25 s. Sleep time per run: 9.6 s to
+  4.1 s; the run itself 123 s to 121 s, because the replaced seconds were
+  waiting for events that arrive when they arrive.
 
 ### Removed
 

@@ -35,7 +35,7 @@ jobs:
           java-version: '17'
       - name: Probe Maven Central
         continue-on-error: true
-        run: curl -sS -o /dev/null -w 'central pom: %{http_code}\n' https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/kotlin-reflect/1.9.23/kotlin-reflect-1.9.23.pom
+        run: curl -sS -o /dev/null -w 'central pom %{http_code}\n' https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/kotlin-reflect/1.9.23/kotlin-reflect-1.9.23.pom
       - uses: gradle/actions/setup-gradle@v4
       # The runner image ships the SDK; install the platform and build tools the
       # library compiles against. sdkmanager directly, not a setup action: the

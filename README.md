@@ -185,10 +185,12 @@ GNU General Public License, version 3 or later. SPDX: `GPL-3.0-or-later`. The
 full text is in [`LICENSE`](LICENSE).
 
 This is a copyleft license: an app that links the library must itself be
-distributed under GPL-3.0-or-later (or a compatible license). If that is not what
-you want, the module is small and self-contained enough to study and reimplement,
-but there is no permissive grant.
+distributed under GPL-3.0-or-later (or a compatible license). The repository this
+was extracted from, [opencode-termux-setup](https://github.com/MBanucu/opencode-termux-setup),
+is GPL-3.0 as well.
 
-Version 0.1.0, published to JitPack before this change, was Apache-2.0; release
-0.2.0 is the first GPL release. The bundled DejaVu Sans Mono font keeps its own
+The license has been GPL-3.0-or-later since the extraction. The POM of the 0.1.0
+JitPack artifact declared Apache-2.0 instead; that metadata was wrong, and 0.2.0
+is the first release whose POM matches the license. The bundled DejaVu Sans Mono
+font keeps its own
 [DejaVu fonts license](https://dejavu-fonts.github.io/License.html).

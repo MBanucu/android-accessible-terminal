@@ -5,3 +5,8 @@ terminal/out/
 samples/out/
 *.apk
 *.idsig
+
+# The device suite keeps timing history and scratch files on the machine that
+# ran it.
+test/.timings.db
+test/out/

@@ -18,7 +18,7 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-version=${HARNESS_VERSION:-0.2.1}
+version=${HARNESS_VERSION:-0.2.2}
 deps=$here/.deps
 venv=$deps/venv
 

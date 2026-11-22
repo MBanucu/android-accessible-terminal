@@ -153,8 +153,8 @@ jars=()
 if grep -rq 'io\.github\.mbanucu\.screenstream' "$dir" 2>/dev/null; then
     # A fetch that fails must stop the build here: without this the script goes on
     # to javac with the dependency missing and reports its symbols as errors.
-    if ! stream=$(fetch_aar io.github.mbanucu screenstream "${SCREENSTREAM_VERSION:-0.1.0}"); then
-        echo "could not get screenstream ${SCREENSTREAM_VERSION:-0.1.0} from Maven Central" >&2
+    if ! stream=$(fetch_aar io.github.mbanucu screenstream "${SCREENSTREAM_VERSION:-0.2.0}"); then
+        echo "could not get screenstream ${SCREENSTREAM_VERSION:-0.2.0} from Maven Central" >&2
         exit 1
     fi
     jars+=("$stream")

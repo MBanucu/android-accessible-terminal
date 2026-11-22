@@ -10,11 +10,14 @@ and this project adheres to
 
 ### Added
 
-- `screenstream` 0.1.0 is published to Maven Central as
-  `io.github.mbanucu:screenstream` — the AAR, POM, sources and javadoc, signed,
-  through the repository's own `publish.sh` (build, sign, checksum, bundle,
-  upload, and `--status`/`--publish` for the deployment). The POM carries no Gradle
-  module metadata, so a Gradle consumer needs `@aar` on the coordinate.
+- `screenstream` is published to Maven Central as `io.github.mbanucu:screenstream`,
+  signed, through the repository's own `publish.sh` (build, sign, checksum, bundle,
+  upload, and `--status`/`--publish` for the deployment). 0.1.0 came from
+  `build.sh` and its POM carries no Gradle module metadata, so a Gradle consumer
+  needs `@aar` on that coordinate; 0.2.0 is the same library published from the
+  Gradle layout instead, so the bundle also carries the `.module` and
+  `implementation("io.github.mbanucu:screenstream:0.2.0")` resolves the AAR as it
+  is. The samples build against 0.2.0 (`SCREENSTREAM_VERSION`).
 - A raw screen stream from the phone itself, in its own repository:
   [`screenstream`](https://github.com/MBanucu/screenstream). It ships as an app
   (`bash build.sh apk`) and as a library

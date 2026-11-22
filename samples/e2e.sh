@@ -396,10 +396,22 @@ start_stream() {
 # The app-op is a change this run made to the phone, so it goes back with the rest.
 # The capture is stopped through the activity, not by force-stopping the probe:
 # the accessibility service stays bound, so the next run does not pay for a rebind.
+# It is checked, though: a capture that survives the stop keeps the port, and the
+# next run (or any other app that wants 7100) then fails to bind with nothing but
+# "address already in use" to go on. Force-stopping is the fallback, not the way.
 stop_stream() {
     [ "$STREAM" = 1 ] || return 0
     device shell "am start -n $PROBE/$STREAM_ACTIVITY --ez stop true \
         >/dev/null 2>&1; appops set $PROBE PROJECT_MEDIA default" >/dev/null 2>&1
+    local i=0 state
+    while [ "$i" -lt 30 ]; do
+        state=$(probe_file screenstream | sed -n 's/^state=//p' | head -1)
+        [ "$state" = stopped ] && return 0
+        sleep 0.1
+        i=$((i + 1))
+    done
+    say "WARNING: the screen stream did not stop; force-stopping the probe"
+    device shell "am force-stop $PROBE" >/dev/null 2>&1
 }
 
 # The probe walks the target window and writes the summary itself; the suite only

@@ -27,7 +27,7 @@ def put(screen, y, x, text):
         pass
 
 
-def draw(screen, lines, typed, keys):
+def draw(screen, lines, typed, keys, others):
     screen.erase()
     rows, cols = screen.getmaxyx()
     put(screen, 0, 0, "CURSES-TYPING")
@@ -35,6 +35,7 @@ def draw(screen, lines, typed, keys):
         text = lines[index] if index < len(lines) else ""
         put(screen, 2 + index, 0, text[:max(0, cols - 1)])
     put(screen, 2 + LINES + 1, 0, "keys: %d" % keys)
+    put(screen, 2 + LINES + 2, 0, "other: %s" % others)
     put(screen, 2 + LINES + 3, 0, "> " + typed[:max(0, cols - 3)])
     # Where the next character will land, the way a caret says it.
     try:
@@ -49,9 +50,18 @@ def main(screen):
     lines = []
     typed = ""
     keys = 0
+    # A resize is delivered by getch as a key (KEY_RESIZE, 410). It is not one
+    # that was typed, and the count is about typed keys, so it is skipped: the
+    # view changes size once while the page starts, and counting it made the
+    # total depend on whether that happened before or after the first frame.
+    # Anything that is not a letter, an Enter or a backspace: when a count is one
+    # too high, this row says which byte it was.
+    others = []
     while True:
-        draw(screen, lines, typed, keys)
+        draw(screen, lines, typed, keys, " ".join(others[-8:]))
         key = screen.getch()
+        if key == getattr(curses, "KEY_RESIZE", 410):
+            continue
         keys += 1
         if key in (10, 13, curses.KEY_ENTER):
             line = typed
@@ -64,6 +74,8 @@ def main(screen):
             typed = typed[:-1]
         elif 32 <= key <= 126:
             typed += chr(key)
+        else:
+            others.append("%d" % key)
 
 
 curses.wrapper(main)

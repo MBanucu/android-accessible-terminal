@@ -9,6 +9,10 @@ So this page draws the same rows, but returns from `getch` every tenth of a
 second, drains whatever keys arrived, and repaints. The frame counter says the
 repainting kept happening while the lines were typed; the rows and the key count
 say nothing was lost while it did.
+
+A resize is delivered by getch as a key of its own; it is skipped, because the
+count is of keys that were typed and the view changes size once while the page
+starts.
 """
 
 import curses
@@ -65,6 +69,9 @@ def main(screen):
             key = screen.getch()
             if key == -1:
                 time.sleep(0.004)
+                continue
+            # A resize arrives as a key (KEY_RESIZE, 410) and was never typed.
+            if key == getattr(curses, "KEY_RESIZE", 410):
                 continue
             keys += 1
             if key in (10, 13, curses.KEY_ENTER):

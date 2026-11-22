@@ -53,6 +53,17 @@ public final class MainActivity extends Activity {
     public static final String ACTION_RESIZE =
             "io.github.mbanucu.samples.nativeterminal.action.RESIZE";
 
+    /**
+     * Writes a snapshot of the screen now, instead of at the next periodic one.
+     *
+     * <p>The snapshot cadence is 1.5 s, so a test that types and then reads the
+     * screen used to sleep two seconds and hope the next snapshot had landed.
+     * Asking for one costs a single round trip and reads the frame the typing
+     * just caused. Exported for the same reason as {@link #ACTION_RESIZE}.
+     */
+    public static final String ACTION_DUMP =
+            "io.github.mbanucu.samples.nativeterminal.action.DUMP";
+
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final StringBuilder transcript = new StringBuilder();
     private TerminalView terminal;
@@ -63,16 +74,21 @@ public final class MainActivity extends Activity {
     private volatile boolean termuxMode;
     /** Whether the session is asked for its size after the first answer. */
     private boolean sizeProbes = true;
+    /** Whether the session has produced any output yet, which is its prompt. */
+    private volatile boolean sawOutput;
     private volatile String evidence = "no evidence file";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         IntentFilter resizes = new IntentFilter(ACTION_RESIZE);
+        IntentFilter dumps = new IntentFilter(ACTION_DUMP);
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             registerReceiver(resizeReceiver, resizes, Context.RECEIVER_EXPORTED);
+            registerReceiver(dumpReceiver, dumps, Context.RECEIVER_EXPORTED);
         } else {
             registerReceiver(resizeReceiver, resizes);
+            registerReceiver(dumpReceiver, dumps);
         }
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -294,6 +310,14 @@ public final class MainActivity extends Activity {
         }
     };
 
+    /** Writes the snapshot a check asked for, with the cursor where it is. */
+    private final BroadcastReceiver dumpReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context from, Intent intent) {
+            writeEvidence("dump cursor=" + (terminal == null ? "?" : terminal.cursor()));
+        }
+    };
+
     /**
      * Shortens the terminal view, and leaves every other window alone.
      *
@@ -388,12 +412,16 @@ public final class MainActivity extends Activity {
                 + Base64.encodeToString(script.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP)
                 + "'))\"";
         termuxMode = true;
+        sawOutput = false;
         live = new LiveStream();
-        int port = live.open(chunk -> ui.post(() -> {
-            transcript.append(chunk);
-            terminal.feed(chunk);
-            status.setText("curses tui, " + transcript.length() + " chars");
-        }));
+        int port = live.open(chunk -> {
+            sawOutput = true;
+            ui.post(() -> {
+                transcript.append(chunk);
+                terminal.feed(chunk);
+                status.setText("curses tui, " + transcript.length() + " chars");
+            });
+        });
         int control = live.openControl();
         writeEvidence("termux:port:" + port + " control:" + control);
         if (port == 0) {
@@ -415,7 +443,7 @@ public final class MainActivity extends Activity {
             if (!live.connected()) {
                 return;
             }
-            sleep(1500);
+            awaitFirstOutput();
             submit(launch);
             writeEvidence(tag + ":started");
             for (int i = 0; i < 30; i++) {
@@ -425,6 +453,20 @@ public final class MainActivity extends Activity {
         }, "tui-driver");
         driver.setDaemon(true);
         driver.start();
+    }
+
+    /**
+     * Waits for the session's first output, up to two seconds.
+     *
+     * <p>This is what the fixed 1.5 s stood in for: an interactive shell prints
+     * its prompt when it is ready to read, which is the moment a submit is safe,
+     * and it is usually a few hundred milliseconds after the socket connects.
+     */
+    private void awaitFirstOutput() {
+        for (int i = 0; i < 20 && !sawOutput; i++) {
+            sleep(100);
+        }
+        writeEvidence("termux:first-output:" + sawOutput);
     }
 
     /**
@@ -696,12 +738,16 @@ public final class MainActivity extends Activity {
      */
     private void startTermuxSession(String command, String label, boolean tui) {
         termuxMode = true;
+        sawOutput = false;
         live = new LiveStream();
-        int port = live.open(chunk -> ui.post(() -> {
-            transcript.append(chunk);
-            terminal.feed(chunk);
-            status.setText("termux session, " + transcript.length() + " chars");
-        }));
+        int port = live.open(chunk -> {
+            sawOutput = true;
+            ui.post(() -> {
+                transcript.append(chunk);
+                terminal.feed(chunk);
+                status.setText("termux session, " + transcript.length() + " chars");
+            });
+        });
         int control = live.openControl();
         writeEvidence("termux:port:" + port + " control:" + control);
         if (port == 0) {
@@ -745,7 +791,7 @@ public final class MainActivity extends Activity {
                 writeEvidence("opencode:still-drawn");
                 return;
             }
-            sleep(1200);
+            awaitFirstOutput();
             // What the session thinks it is, answered by the session itself.
             submit("tty; [ -t 0 ] && echo session-stdin-is-tty; "
                     + "[ -t 1 ] && echo session-stdout-is-tty; echo size=$(stty size)");
@@ -946,6 +992,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         unregisterReceiver(resizeReceiver);
+        unregisterReceiver(dumpReceiver);
         int fd = master;
         master = -1;
         if (fd >= 0) {

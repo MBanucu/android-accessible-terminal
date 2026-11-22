@@ -21,6 +21,20 @@ and this project adheres to
 - The same three lines into a curses form that repaints ten times a second, so
   fast typing is checked while output is arriving rather than only into a
   program sitting in `getch`.
+- A progress and ETA line after every check: how many checks are done, what the
+  run has spent, what is left and when it should finish, from
+  `test/timings.py eta`. The estimate now counts the run's wall clock (so the
+  install it already paid for is included) and takes the median of each
+  check's last few runs, so it follows a suite that got faster.
+
+### Changed
+
+- The e2e suite takes about a third less time: 194 s down to 123 s for the 23
+  checks. The startup gate reads the probe's window count instead of dumping
+  every window tree (32 s of the run), a launch is one adb call instead of
+  four, a check asks for a screen snapshot instead of sleeping until the next
+  periodic one, and a TUI is started as soon as its shell prompt arrives
+  rather than after a fixed 1.5 s.
 
 ### Removed
 
@@ -29,6 +43,11 @@ and this project adheres to
 
 ### Fixed
 
+- A curses page counted the resize ncurses delivers as a key (`KEY_RESIZE`,
+  410), so a typing check could report one key more than was typed depending on
+  whether the view resized before or after the program's first frame. Resizes
+  are skipped, and the check now asserts the program starts with no key
+  waiting.
 - The sample's live stream wrote each send from its own thread, so a line and
   its Enter could reach the pty in either order. One writer now drains a queue,
   keeping typed bytes and their Enter in the order they were typed.

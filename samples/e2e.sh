@@ -38,6 +38,9 @@ esac
 # A comma is how a shell user usually writes a list; spaces are how the loop reads it.
 ONLY=${ONLY//,/ }
 START=$SECONDS
+# The wall clock the run began by, for the estimate: spent time includes the
+# install and the device setup, not only the checks written down so far.
+START_EPOCH=$(date +%s)
 CHECKS_RUN=0
 CHECKS="pty pty-flags pty-raw tty-tabs tty-scroll tty-edit tty-typing tui-fast-typing tui-fast-typing-load cursor cursor-escapes colour tui tui-echo tui-caret tui-blink tui-bg tui-symbols tui-modes resize rows session session-resize"
 FAIL=0
@@ -329,12 +332,16 @@ type_in_app() {
 
 # Bound is not able to see: right after the accessibility settings are written
 # the connection can be up with no windows in it yet, and every action then has
-# nothing to act on. The service's own dump is the witness.
+# nothing to act on. The service's own window count is the witness.
+#
+# The count comes from `inspect`, not `dump`: both report `windows=`, but a dump
+# walks every window's tree and writes it out, which on this device cost 32 s of
+# the run's 161 s at the top of every suite. The summary is 140 ms.
 await_windows() {
-    local tries=${1:-12} i=0 tree
+    local tries=${1:-12} i=0 summary
     while [ "$i" -lt "$tries" ]; do
-        tree=$(dump e2e-ready)
-        if printf '%s\n' "$tree" | grep -aqE '^windows=[1-9]'; then
+        summary=$(inspect e2e-ready)
+        if printf '%s\n' "$summary" | grep -aqE '^windows=[1-9]'; then
             return 0
         fi
         sleep 1
@@ -410,7 +417,7 @@ settled_grid() {
     local first second tries=${1:-10} i=0
     first=$(last_grid)
     while [ "$i" -lt "$tries" ]; do
-        sleep 2
+        sleep 0.5
         second=$(last_grid)
         if [ "$second" = "$first" ]; then
             printf '%s' "$second"
@@ -501,14 +508,15 @@ install_everything() {
 }
 
 # A clean app and a granted Termux permission. pm clear revokes runtime
-# permissions, so the grant has to come after it, not before.
+# permissions, so the grant has to come after it, not before. One adb round trip
+# for all four: this runs once per check, and four calls cost 379 ms here against
+# 163 ms for the four statements in one call.
 launch() {
     local attempt
     for attempt in 1 2; do
-        device shell am force-stop "$APP" >/dev/null 2>&1
-        device shell pm clear "$APP" >/dev/null 2>&1
-        device shell pm grant "$APP" com.termux.permission.RUN_COMMAND >/dev/null 2>&1
-        device shell am start -n "$APP/.MainActivity" "$@" >/dev/null 2>&1
+        device shell "am force-stop $APP; pm clear $APP >/dev/null; \
+            pm grant $APP com.termux.permission.RUN_COMMAND; \
+            am start -n $APP/.MainActivity $*" >/dev/null 2>&1
         if await "activity:created" 15; then
             return 0
         fi
@@ -518,6 +526,34 @@ launch() {
     bad "launch: the app did not start after two attempts (adb: $(device get-state 2>/dev/null))"
     device logcat -d -t 400 2>/dev/null \
         | grep -a 'FATAL\|nativeterminal' | tail -6 | sed 's/^/     /'
+}
+
+# Asks the app for a snapshot of the screen now. The app writes one every 1.5 s
+# on its own, so a check that read `last_screen` after typing had to sleep until
+# the next periodic one; a snapshot on demand is one round trip and is the frame
+# the typing caused.
+request_dump() {
+    device shell "am broadcast -p $APP -a $APP.action.DUMP >/dev/null 2>&1" 2>/dev/null
+}
+
+fresh_screen() {
+    request_dump
+    last_screen
+}
+
+# The newest screen, once it holds the line. A snapshot asked for before the
+# program's first paint is a blank grid, which is not the same answer as a line
+# that never appears, so this asks again instead of failing on the first look.
+await_screen() {
+    local pattern=$1 seconds=${2:-5} i=0 screen
+    while [ "$i" -lt $((seconds * 5)) ]; do
+        request_dump
+        screen=$(last_screen)
+        printf '%s\n' "$screen" | grep -qxF -- "$pattern" && return 0
+        sleep 0.1
+        i=$((i + 1))
+    done
+    return 1
 }
 
 dump() {
@@ -823,9 +859,8 @@ test_tui_echoes_the_line_above() {
     fi
     ok "echo tui: the word a service typed reached the program"
 
-    # The dump cadence is 1.5 s; one more snapshot is the frame after Enter.
-    sleep 2
-    screen=$(last_screen)
+    # The frame after Enter, asked for rather than waited for.
+    screen=$(fresh_screen)
     local echo_row input_row
     echo_row=$(printf '%s\n' "$screen" | grep -nF '|  hello' | head -1 | cut -d: -f1)
     input_row=$(printf '%s\n' "$screen" | grep -nE '\|  > ' | head -1 | cut -d: -f1)
@@ -1294,8 +1329,8 @@ test_pty_reports_its_device() {
         bad "pty flags: the program never reported"
         return
     fi
-    sleep 2
     local screen
+    request_dump
     screen=$(all_screens)
     printf '%s\n' "$screen" | grep -qE '^tty: /dev/pts/[0-9]+$' \
         && ok "pty flags: stdin is a pty device" \
@@ -1337,8 +1372,8 @@ test_tab_stops() {
         bad "tabs: the program never drew"
         return
     fi
-    sleep 2
     local screen
+    request_dump
     screen=$(all_screens)
     has_line "$screen" "A       B" \
         && ok "tabs: HT moved B to the 9th column" \
@@ -1356,9 +1391,8 @@ test_scroll_region() {
         bad "scroll: the program never drew"
         return
     fi
-    sleep 2
     local screen
-    screen=$(last_screen)
+    screen=$(fresh_screen)
     [ "$(printf '%s\n' "$screen" | sed -n '1p')" = "top" ] \
         && ok "scroll: the row above the region did not move" \
         || bad "scroll: the row above the region moved (got '$(printf '%s\n' "$screen" | sed -n '1p')')"
@@ -1381,9 +1415,8 @@ test_insert_and_delete() {
         bad "edit: the program never drew"
         return
     fi
-    sleep 2
     local screen
-    screen=$(last_screen)
+    screen=$(fresh_screen)
     [ -z "$(printf '%s\n' "$screen" | sed -n '2p')" ] \
         && ok "edit: IL opened a blank row at 2" \
         || bad "edit: IL left text in the row it inserted"
@@ -1428,9 +1461,8 @@ test_fast_typing_keeps_every_letter() {
         bad "typing: the second line never arrived"
         return
     fi
-    sleep 2
     local screen got
-    screen=$(last_screen)
+    screen=$(fresh_screen)
     got=$(printf '%s\n' "$screen" | grep -c '^got ')
     [ "$got" = 2 ] \
         && ok "typing: exactly two lines arrived for two submits" \
@@ -1459,6 +1491,14 @@ test_curses_fast_typing() {
         bad "curses typing: the TUI never drew"
         return
     fi
+    # Nothing typed yet, so nothing read: a count that starts above zero means a
+    # byte was already waiting when the program started, and the last check would
+    # then report it as a letter that arrived twice.
+    if await_screen "keys: 0" 10; then
+        ok "curses typing: the program started with no key waiting"
+    else
+        bad "curses typing: the program already had a key before anything was typed"
+    fi
     local first="THE-QUICK-BROWN-FOX-0123456789-JUMPS-OVER-THE-LAZY-DOG"
     local second="PACK-MY-BOX-WITH-FIVE-DOZEN-LIQUOR-JUGS-9876543210"
     local third="done"
@@ -1469,9 +1509,8 @@ test_curses_fast_typing() {
         bad "curses typing: not all three lines reached the TUI"
         return
     fi
-    sleep 2
     local screen expected keys
-    screen=$(last_screen)
+    screen=$(fresh_screen)
     printf '%s\n' "$screen" | grep -qxF "got 1 ${#first} $first" \
         && ok "curses typing: the first line arrived whole, in order" \
         || bad "curses typing: the first line is not the one that was sent"
@@ -1501,6 +1540,11 @@ test_curses_fast_typing_under_load() {
         bad "curses typing under load: the TUI never drew"
         return
     fi
+    if await_screen "keys: 0" 10; then
+        ok "curses typing under load: the program started with no key waiting"
+    else
+        bad "curses typing under load: it already had a key before anything was typed"
+    fi
     local first="THE-QUICK-BROWN-FOX-0123456789-JUMPS-OVER-THE-LAZY-DOG"
     local second="PACK-MY-BOX-WITH-FIVE-DOZEN-LIQUOR-JUGS-9876543210"
     local third="done"
@@ -1511,9 +1555,8 @@ test_curses_fast_typing_under_load() {
         bad "curses typing under load: not all three lines reached the TUI"
         return
     fi
-    sleep 2
     local screen expected keys frames
-    screen=$(last_screen)
+    screen=$(fresh_screen)
     printf '%s\n' "$screen" | grep -qxF "got 1 ${#first} $first" \
         && ok "curses typing under load: the first line arrived whole, in order" \
         || bad "curses typing under load: the first line is not the one sent"
@@ -1545,6 +1588,23 @@ wanted() {
     return 1
 }
 
+# How far the run has come and how much longer it needs. What is left is the
+# median of each remaining check from test/.timings.db; what is spent is this
+# run's wall clock, so the install and setup it has already paid for count and
+# the estimate does not look too short at the start. Silent for `--only`, where
+# there is no run to estimate, and until there is history to estimate from.
+eta_line() {
+    [ -n "$ONLY" ] && return 0
+    local line
+    line=$(python3 "$here/../test/timings.py" eta --class samples.e2e \
+        --run "$RUN_STARTED" --log "$TIMING_LOG" --db "$here/../test/.timings.db" \
+        --order "$CHECKS" --started "$START_EPOCH" 2>/dev/null) || return 0
+    case "$line" in
+        "eta: no timing history"*) return 0 ;;
+    esac
+    printf '  %s\n' "$line"
+}
+
 check() {
     local name=$1
     shift
@@ -1560,6 +1620,7 @@ check() {
     # The log line test/timings.py already knows: class#test duration outcome.
     printf 'timing: samples.e2e#%s %dms %s\n' "$name" "$((seconds * 1000))" \
         "$([ "$FAIL_COUNT" = "$before" ] && echo passed || echo failed)" >> "$TIMING_LOG"
+    eta_line
 }
 
 # Records this run in the suite's existing timing database.

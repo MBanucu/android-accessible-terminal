@@ -28,8 +28,8 @@ dependencies {
 }
 ```
 
-Until the first Central release is out, or to build a tag that has not been
-released there, [JitPack](https://jitpack.io) serves the same sources:
+[JitPack](https://jitpack.io) also serves tags that have not been released to
+Central, including the Apache-labelled 0.1.0:
 
 ```kotlin
 // settings.gradle.kts

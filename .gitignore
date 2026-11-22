@@ -13,3 +13,6 @@ test/out/
 
 # The pinned timing tool, fetched by test/timings.sh on first use.
 test/.deps/
+
+# A database made by running test/timings.sh by hand from the root.
+/.timings.db

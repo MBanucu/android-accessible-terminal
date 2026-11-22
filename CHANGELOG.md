@@ -10,21 +10,26 @@ and this project adheres to
 
 ### Added
 
-- A raw screen stream from the phone itself: `StreamActivity` asks for the display
-  once and `StreamService` serves it as RGBA_8888 frames straight from an
-  `ImageReader` - no encoder, no container - on `127.0.0.1:7100`, which apps reach
-  directly and adb reaches through `adb forward`. Each frame is a 36-byte header
-  (`RAW1`, size, stride, format, frame number, device timestamp) and its pixels.
-  It is VFR the way the recording is: only frames whose pixels changed are
-  numbered and sent, so a still screen sends nothing and the gaps are idle time.
-  Consent can come from `adb shell appops set <pkg> PROJECT_MEDIA allow`, which
-  starts the capture with no dialog at all, or from the probe clicking the system
-  dialog as a screen reader would. `test/stream.py` attaches, prints the shape of
-  the stream and keeps frames when asked; a frame taken this way matched
-  `screencap` pixel for pixel.
+- A raw screen stream from the phone itself, in its own repository:
+  [`screenstream`](https://github.com/MBanucu/screenstream), a submodule at
+  `screenstream/`. It ships as an app (`bash build.sh apk`) and as a library
+  (AAR, jar, sources and POM, for an app or a test framework to depend on).
+  `ScreenStreamActivity` asks for the display once and `ScreenStream` serves it as
+  RGBA_8888 frames straight from an `ImageReader` - no encoder, no container - on
+  `127.0.0.1:7100`, which apps reach directly and adb reaches through
+  `adb forward`. Each frame is a 36-byte header (`RAW1`, size, stride, format,
+  frame number, device timestamp) and its pixels. It is VFR the way the recording
+  is: only frames whose pixels changed are numbered and sent, so a still screen
+  sends nothing and the gaps are idle time. Consent can come from
+  `adb shell appops set <pkg> PROJECT_MEDIA allow`, which starts the capture with
+  no dialog at all, or from an accessibility service clicking the system dialog as
+  a screen reader would (`ScreenStream.setDialogClicker`).
+  `screenstream/client/stream.py` attaches, prints the shape of the stream and
+  keeps frames when asked; a frame taken this way matched `screencap` pixel for
+  pixel.
 - `STREAM=1 bash samples/e2e.sh` makes the pixel checks read that stream: the
-  probe's watch subscribes to the changed frames in-process instead of taking a
-  screenshot every 333 ms, so it judges every change the screen made, and the
+  probe's watch subscribes to the changed frames in-process through the module's
+  `subscribe` instead of taking a screenshot every 333 ms, so it judges every change the screen made, and the
   frame number and device time in its answer are the stream's own. It judges the
   screen it starts on once as well, from a screenshot numbered as the source's
   last frame, because a stream says what changed and a check may start while the

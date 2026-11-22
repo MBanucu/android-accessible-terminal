@@ -10,6 +10,8 @@ import android.view.accessibility.AccessibilityWindowInfo;
 
 import java.io.File;
 import java.io.FileOutputStream;
+
+import io.github.mbanucu.screenstream.ScreenStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
@@ -68,6 +70,11 @@ public final class ProbeService extends AccessibilityService {
     @Override
     protected void onServiceConnected() {
         instance = this;
+        // The screen stream is a library this app depends on, and this service is
+        // what can accept its capture dialog: the module only knows that something
+        // may click it, not what. Set here rather than in the activity that asks,
+        // because the activity is started by adb and may never run in this app.
+        ScreenStream.setDialogClicker(ProbeService::acceptScreenCaptureDialog);
         write("status.txt", "connected\nflags=" + getServiceInfo().flags + "\n");
         Log.i(TAG, "connected");
     }
@@ -437,8 +444,9 @@ public final class ProbeService extends AccessibilityService {
      *
      * <p>Screen capture is not a permission an app can hold: the system shows a
      * dialog every time, and only a person - or something standing in for one -
-     * can accept it. That standing-in is this service. {@code StreamActivity} asks
-     * for the capture and calls this; the dialog is another window, so the service
+     * can accept it. That standing-in is this service. The screenstream module's
+     * activity asks for the capture and calls this; the dialog is another window,
+     * so the service
      * looks for its positive button in the system UI and clicks it, and says in
      * actions.txt what it clicked.
      */

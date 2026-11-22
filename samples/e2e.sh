@@ -29,6 +29,9 @@ set -u
 ADB=${ADB:-adb}
 APP=io.github.mbanucu.samples.nativeterminal
 PROBE=io.github.mbanucu.samples.a11yprobe
+# The stream is its own repository and its own package; the probe only depends on
+# it, so the component adb starts is named after the module, not after the app.
+STREAM_ACTIVITY=io.github.mbanucu.screenstream.ScreenStreamActivity
 APK=samples/out/native-terminal.apk
 PROBE_APK=samples/out/a11y-probe.apk
 FILES=/sdcard/Android/data/$APP/files
@@ -42,9 +45,9 @@ ONLY=""
 # run at all. test/capture.py maps an event to the frame that was on screen then
 # and extracts it when somebody asks for it.
 RECORD=1
-# STREAM=1 (or --stream) starts the probe's screen stream once and lets every
-# pixel check read it: the checks then see every changed frame instead of three
-# screenshots a second. Off by default, because it needs the screen-capture
+# STREAM=1 (or --stream) starts the screenstream module's source once and lets
+# every pixel check read it: the checks then see every changed frame instead of
+# three screenshots a second. Off by default, because it needs the screen-capture
 # permission, which the screenshots path does not.
 STREAM=${STREAM:-0}
 FAILED_CHECKS=""
@@ -364,20 +367,22 @@ watched() { printf '%s\n' "$1" | sed -n "s/^$2=//p" | tail -1; }
 watch_said() { printf '%s\n' "$1" | tr '\n' ' ' | sed 's/  */ /g; s/ *$//'; }
 
 # --- the stream, when the run asks for its frames ------------------------------
-# STREAM=1 starts the probe's raw source once and every pixel check subscribes to
-# it, so a check sees every changed frame instead of three screenshots a second.
-# Consent comes from the app-op, which starts the capture with no dialog; a device
-# that refuses that route falls back to the probe clicking the dialog itself,
-# which is why this runs after the service is enabled. It runs at native size
-# because a check names its region in the display's own coordinates.
+# STREAM=1 starts the screenstream module's raw source once and every pixel check
+# subscribes to it, so a check sees every changed frame instead of three
+# screenshots a second. The source is a separate repository the probe depends on,
+# which is why its state file and its activity are named after it rather than
+# after the probe. Consent comes from the app-op, which starts the capture with no
+# dialog; a device that refuses that route falls back to the probe clicking the
+# dialog itself, which is why this runs after the service is enabled. It runs at
+# native size because a check names its region in the display's own coordinates.
 start_stream() {
     [ "$STREAM" = 1 ] || return 0
     device shell "appops set $PROBE PROJECT_MEDIA allow" >/dev/null 2>&1 || true
-    device shell "rm -f '$PROBE_FILES/stream.txt'; \
-        am start -n $PROBE/.StreamActivity" >/dev/null 2>&1
+    device shell "rm -f '$PROBE_FILES/screenstream.txt'; \
+        am start -n $PROBE/$STREAM_ACTIVITY" >/dev/null 2>&1
     local i=0 state
     while [ "$i" -lt 150 ]; do
-        state=$(probe_file stream | sed -n 's/^state=//p' | head -1)
+        state=$(probe_file screenstream | sed -n 's/^state=//p' | head -1)
         case "$state" in
             streaming) return 0 ;;
             failed) return 1 ;;
@@ -393,7 +398,7 @@ start_stream() {
 # the accessibility service stays bound, so the next run does not pay for a rebind.
 stop_stream() {
     [ "$STREAM" = 1 ] || return 0
-    device shell "am start -n $PROBE/.StreamActivity --ez stop true \
+    device shell "am start -n $PROBE/$STREAM_ACTIVITY --ez stop true \
         >/dev/null 2>&1; appops set $PROBE PROJECT_MEDIA default" >/dev/null 2>&1
 }
 
@@ -1789,7 +1794,7 @@ fi
 
 install_everything
 if [ "$STREAM" = 1 ] && ! start_stream; then
-    say "FAIL the screen stream did not start ($(probe_file stream | tr '\n' ' '))"
+    say "FAIL the screen stream did not start ($(probe_file screenstream | tr '\n' ' '))"
     FAIL=1
     record_run
     exit 1

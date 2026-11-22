@@ -174,22 +174,26 @@ frames instead, which is every change rather than three a second; see below.
 
 ### The screen stream
 
-`StreamActivity` asks the system for the display once, and `StreamService` serves
-it as a raw stream with no encoder and no container in the way: RGBA_8888 frames
-straight from an `ImageReader`, numbered, timed on the device, and sent only when
-the screen changes. Anything on the phone attaches to `127.0.0.1:7100`; adb
-reaches the same port through a forward.
+The stream is not part of this app: it is its own repository,
+[`screenstream`](https://github.com/MBanucu/screenstream), checked in here as a
+submodule at `screenstream/`, and `samples/build.sh` compiles its source set into
+any sample that names it, the way a Gradle app would get it from the AAR. The
+module's `ScreenStreamActivity` asks the system for the display once, and its
+`ScreenStream` service serves it as a raw stream with no encoder and no container
+in the way: RGBA_8888 frames straight from an `ImageReader`, numbered, timed on the
+device, and sent only when the screen changes. Anything on the phone attaches to
+`127.0.0.1:7100`; adb reaches the same port through a forward.
 
 ```bash
 # Consent. The app-op is the quiet way and needs no screen reader:
 adb shell appops set io.github.mbanucu.samples.a11yprobe PROJECT_MEDIA allow
-adb shell am start -n io.github.mbanucu.samples.a11yprobe/.StreamActivity
+adb shell am start -n io.github.mbanucu.samples.a11yprobe/io.github.mbanucu.screenstream.ScreenStreamActivity
 # Or let the probe accept the system dialog itself, as a screen reader would:
 # with the probe enabled, start the same activity and it clicks "Start".
 
 adb forward tcp:7100 tcp:7100                 # for anything on the other end
-python3 test/stream.py --seconds 5            # read frames, print their shape
-python3 test/stream.py --frames 3 --png samples/out/stream   # keep a few
+python3 screenstream/client/stream.py --seconds 5            # frames, their shape
+python3 screenstream/client/stream.py --frames 3 --png samples/out/stream
 ```
 
 A frame is a 36-byte big-endian header — `RAW1`, width, height, row stride,
@@ -209,7 +213,7 @@ It is raw, so it is big: 18.4 MB a frame at native resolution (1440x3200).
 `--ei scale 2` hands the frames over at half size instead (720x1600, 4.6 MB),
 composited at that size rather than downscaled afterwards. A consumer that falls
 behind gets the newest frame and older ones are dropped — `frames_skipped` in
-`files/stream.txt` counts them — and a consumer that stops reading is
+`files/screenstream.txt` counts them — and a consumer that stops reading is
 disconnected after two seconds. That is the trade a raw stream makes: the screen
 never waits for a slow reader, and memory stays in a pool of three frames.
 
@@ -223,10 +227,10 @@ from a screenshot: a stream says what changed, and a check that begins while the
 app is already drawn (a caret that does not blink) would otherwise have nothing to
 look at. That first frame carries the number of the last frame the source sent,
 which is still what the display shows. A capture started this way is stopped with
-`am start -n io.github.mbanucu.samples.a11yprobe/.StreamActivity --ez stop true`;
+`am start -n io.github.mbanucu.samples.a11yprobe/io.github.mbanucu.screenstream.ScreenStreamActivity --ez stop true`;
 the app-op can then go back to `default`. A tap holds the same frame as the sockets (the
 buffer goes back to the pool when the last holder lets go), so a watch and a
-consumer can read at once; `taps` in `files/stream.txt` counts them. The default
+consumer can read at once; `taps` in `files/screenstream.txt` counts them. The default
 run does not start the stream, because the screenshots need no screen-capture
 consent and the stream does.
 

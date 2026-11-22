@@ -88,15 +88,20 @@ aapt2 link -o "$work/base.apk" \
 
 # --- java ----------------------------------------------------------------------
 echo "== $app: javac =="
-# The terminal view is a module, not part of any one app: terminal/src is compiled
-# into every sample, the way a library module's source set would be. Only the
-# classes a sample references end up in its dex, so compiling it everywhere costs
-# a second and keeps the module honest about being self-contained.
-if grep -rq 'io\.github\.mbanucu\.terminal' "$dir/src" 2>/dev/null; then
-    mapfile -t sources < <(find "$dir/src" "$work/gen" "$root/terminal/src/main/java" -name '*.java')
-else
-    mapfile -t sources < <(find "$dir/src" "$work/gen" -name '*.java' 2>/dev/null)
+# The terminal view and the screen stream are modules, not part of any one app:
+# their source sets are compiled into every app that names them, the way a library
+# module's source set would be. The whole app directory is searched, manifest
+# included, so an app that is only a manifest (screen-stream) picks up the module
+# its components come from. Those are the modules a Gradle app would get from an
+# AAR; here the sources are the artifact.
+modules=()
+if grep -rq 'io\.github\.mbanucu\.terminal' "$dir" 2>/dev/null; then
+    modules+=("$root/terminal/src/main/java")
 fi
+if grep -rq 'io\.github\.mbanucu\.screenstream' "$dir" 2>/dev/null; then
+    modules+=("$root/screenstream/src/main/java")
+fi
+mapfile -t sources < <(find "$dir/src" "$work/gen" ${modules[@]+"${modules[@]}"} -name '*.java' 2>/dev/null)
 javac -nowarn --release 17 -classpath "$android_jar" -d "$work/classes" "${sources[@]}"
 
 python3 - "$work/classes" "$work/classes.jar" <<'EOF'

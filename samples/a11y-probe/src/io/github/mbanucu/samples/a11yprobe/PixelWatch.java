@@ -21,6 +21,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 
+import io.github.mbanucu.screenstream.ScreenStream;
+
 /**
  * Pixels, watched on the phone by the probe rather than pulled off it by adb.
  *
@@ -369,7 +371,7 @@ final class PixelWatch {
         }
 
         /**
-         * Frames from the probe's screen stream instead of screenshots.
+         * Frames from the screenstream module instead of screenshots.
          *
          * <p>The compositor has already dropped the frames that changed nothing
          * and numbered the rest, so there is no pacing here and nothing to compare
@@ -384,7 +386,7 @@ final class PixelWatch {
          */
         private boolean watchStream(long started) {
             final CountDownLatch done = new CountDownLatch(1);
-            StreamService.Tap tap = frame -> {
+            ScreenStream.Tap tap = frame -> {
                 try {
                     synchronized (judging) {
                         if (finished || passed) {
@@ -414,7 +416,7 @@ final class PixelWatch {
                     frame.release();
                 }
             };
-            if (!StreamService.subscribe(tap)) {
+            if (!ScreenStream.subscribe(tap)) {
                 return false;
             }
             source = "stream";
@@ -430,7 +432,7 @@ final class PixelWatch {
                     if (first != null) {
                         synchronized (judging) {
                             if (!passed) {
-                                first.number = StreamService.frameNumber();
+                                first.number = ScreenStream.frameNumber();
                                 if (inFrontNow()) {
                                     frames++;
                                     last = first;
@@ -451,7 +453,7 @@ final class PixelWatch {
                 Thread.currentThread().interrupt();
             } finally {
                 finished = true;
-                StreamService.unsubscribe(tap);
+                ScreenStream.unsubscribe(tap);
             }
             return true;
         }
@@ -655,7 +657,7 @@ final class PixelWatch {
          * the sample grid is the same one the screenshot path builds - which is
          * what makes a count from one comparable with a count from the other.
          */
-        private Frame readStreamFrame(StreamService.Frame frame) {
+        private Frame readStreamFrame(ScreenStream.Frame frame) {
             byte[] pixels = frame.pixels;
             int width = frame.width;
             int height = frame.height;

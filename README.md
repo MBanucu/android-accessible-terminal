@@ -179,6 +179,10 @@ back afterwards.
 - **Not verified against TalkBack**, only against an `AccessibilityService`
   probe, on one device (Android 15, API 35).
 
+## Changelog
+
+What changed in each release is in [`CHANGELOG.md`](CHANGELOG.md).
+
 ## License
 
 GNU General Public License, version 3 or later. SPDX: `GPL-3.0-or-later`. The

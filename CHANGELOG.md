@@ -1,0 +1,79 @@
+# Changelog
+
+Notable changes to this project. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Changed
+
+- Releases publish automatically once the Central Portal validates the bundle
+  (`publishingType = AUTOMATIC`). 0.2.0 was released by hand to prove the path.
+
+## [0.2.0] - 2026-11-22
+
+The first release on Maven Central, as
+`io.github.mbanucu:android-accessible-terminal`. Terminal behaviour is unchanged:
+the sources under `terminal/src` are identical to 0.1.0.
+
+### Added
+
+- Publishing through the Central Portal API (Nmcp): one signed bundle with the
+  AAR, sources jar, javadoc jar, Gradle module metadata and POM.
+- A release workflow that builds the tag it was started from and publishes it;
+  `--ref <tag>` retries a failed run without another tag.
+- CI builds the bundle (`nmcpZipAggregation`) on every push, so a missing
+  sources or javadoc jar is caught before a release is cut.
+
+### Changed
+
+- The Maven group is `io.github.mbanucu`, the namespace verified in the Central
+  Portal. The JitPack coordinate stays `com.github.MBanucu:android-accessible-terminal`.
+
+### Fixed
+
+- The POM declared Apache-2.0 while `LICENSE` has always been GPL-3.0; the POM
+  now says GPL-3.0-or-later. Release notes for 0.1.0 record the same.
+- CI installed the Android SDK with an action that runs `sdkmanager tools`, which
+  current cmdline-tools no longer provide; the platform is installed directly now.
+
+## [0.1.0] - 2026-11-22
+
+Extracted from
+[opencode-termux-setup](https://github.com/MBanucu/opencode-termux-setup) into
+its own repository. The first standalone version of the library.
+
+### Added
+
+- `TerminalView`, a `View` that draws a character grid and publishes it to
+  accessibility services: one node per non-blank row, an editable prompt node,
+  `ACTION_SET_TEXT`, `InputConnection`, and announcements coalesced to one per
+  400 ms of quiet.
+- `Screen`, the ECMA-48 subset a TUI uses: alternate screen, cursor addressing,
+  erases, insert/delete, scroll regions, and SGR colour (16, 256 and truecolor)
+  with underline, reverse, dim, italic, strikethrough and hidden.
+- A 3000-row primary-screen scrollback with per-cell colour and attributes, a
+  cell-range selection model that joins wrapped rows, and touch drag/fling
+  scrolling.
+- Key encoding for hardware keys, DECCKM application-cursor mode, the Ctrl/Alt
+  character forms and xterm's modifier parameters, plus bracketed-paste, focus
+  and mouse-mode tracking.
+- Query replies through a `ReplySink`: DA1/DA2, DSR/CPR, XTVERSION, the kitty
+  keyboard query and OSC 10/11 colours.
+- Width-2 handling for CJK and fullwidth glyphs, with whole-glyph wrapping at the
+  right edge.
+- Fifteen JVM suites, 330 checks, run by `bash terminal/test.sh` with no device,
+  Gradle or test framework.
+- The `samples/native-terminal` and `samples/a11y-probe` apps, with
+  `samples/e2e.sh` driving the view on a device through an `AccessibilityService`.
+- A Gradle `com.android.library` build producing the AAR, published to JitPack.
+
+### Notes
+
+- Licensed GPL-3.0-or-later from the extraction. The 0.1.0 POM said Apache-2.0 by
+  mistake; the code was never Apache-licensed.
+
+[Unreleased]: https://github.com/MBanucu/android-accessible-terminal/compare/0.2.0...HEAD
+[0.2.0]: https://github.com/MBanucu/android-accessible-terminal/compare/0.1.0...0.2.0
+[0.1.0]: https://github.com/MBanucu/android-accessible-terminal/releases/tag/0.1.0

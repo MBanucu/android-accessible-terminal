@@ -68,6 +68,9 @@ gh secret set SIGNING_PASSWORD
 Central never allows a version to be replaced, so the version is taken from the
 tag:
 
+Move the `Unreleased` entries in [`CHANGELOG.md`](CHANGELOG.md) under the new
+version first, then tag:
+
 ```bash
 git tag 0.2.0
 git push origin 0.2.0

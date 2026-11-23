@@ -1,12 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="io.github.mbanucu.samples.a11yprobe">
+    package="io.github.mbanucu.a11yprobe"
+    android:versionCode="1"
+    android:versionName="1.0.0">
 
     <!-- The screen stream is a library this app depends on: the AAR published to
-         Maven Central, which samples/build.sh fetches by version. Its own manifest
-         declares these permissions and its two components, so a Gradle app gets
-         them by merging; this build has no manifest merger, so they are declared
-         here as well. -->
+         Maven Central, which a11y-probe/build.sh fetches by version. Its own
+         manifest declares these permissions and its two components, so a Gradle
+         app gets them by merging; this build has no manifest merger, so they are
+         declared here as well. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
@@ -55,11 +57,16 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
-        <!-- Commands arrive from adb: dump the tree, set text, focus, click. -->
+        <!-- Commands arrive from adb: dump the tree, set text, focus, click, and
+             report the probe's version. The second action is the
+             io.github.mbanucu.samples.a11yprobe one from before this module was
+             promoted; it is accepted for one release so an existing harness keeps
+             working while it moves to the new name. -->
         <receiver
             android:name=".ProbeCommand"
             android:exported="true">
             <intent-filter>
+                <action android:name="io.github.mbanucu.a11yprobe.COMMAND" />
                 <action android:name="io.github.mbanucu.samples.a11yprobe.COMMAND" />
             </intent-filter>
         </receiver>

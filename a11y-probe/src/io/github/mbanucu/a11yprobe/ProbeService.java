@@ -1,6 +1,9 @@
-package io.github.mbanucu.samples.a11yprobe;
+package io.github.mbanucu.a11yprobe;
 
 import android.accessibilityservice.AccessibilityService;
+import android.content.Context;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.graphics.Rect;
 import android.os.Bundle;
 import android.util.Log;
@@ -26,7 +29,7 @@ import java.util.List;
  *
  * <pre>
  * settings put secure enabled_accessibility_services \
- *     io.github.mbanucu.samples.a11yprobe/.ProbeService
+ *     io.github.mbanucu.a11yprobe/.ProbeService
  * settings put secure accessibility_enabled 1
  * </pre>
  *
@@ -34,7 +37,7 @@ import java.util.List;
  * this app's external files directory, so what a service can see and do is a
  * file rather than an opinion.
  */
-public final class ProbeService extends AccessibilityService {
+public class ProbeService extends AccessibilityService {
 
     private static final String TAG = "A11yProbe";
     /** Events kept for the log; a terminal that repaints constantly makes thousands. */
@@ -67,6 +70,36 @@ public final class ProbeService extends AccessibilityService {
         return service == null ? null : service.getExternalFilesDir(null);
     }
 
+    /**
+     * The installed version, read from the package manager rather than from a
+     * build-time constant, so a harness can refuse a probe it does not know.
+     *
+     * <p>Written to {@code files/version.txt} and returned for the broadcast log.
+     * The receiver has a context even while the service is disabled, which is why
+     * this takes one instead of using {@link #files()}.
+     */
+    static String version(Context context) {
+        String answer;
+        try {
+            PackageInfo info = context.getPackageManager()
+                    .getPackageInfo(context.getPackageName(), 0);
+            answer = "a11y-probe " + info.versionName + " (" + info.versionCode + ")";
+        } catch (PackageManager.NameNotFoundException missing) {
+            answer = "a11y-probe unknown (package manager has no entry)";
+        }
+        File directory = context.getExternalFilesDir(null);
+        if (directory != null) {
+            File file = new File(directory, "version.txt");
+            directory.mkdirs();
+            try (FileOutputStream out = new FileOutputStream(file, false)) {
+                out.write(answer.getBytes(StandardCharsets.UTF_8));
+            } catch (IOException failed) {
+                Log.w(TAG, "could not write " + file, failed);
+            }
+        }
+        return answer;
+    }
+
     @Override
     protected void onServiceConnected() {
         instance = this;
@@ -86,7 +119,9 @@ public final class ProbeService extends AccessibilityService {
         }
         String packageName = String.valueOf(event.getPackageName());
         // The probe's own screens are noise; a terminal being read is the point.
-        if (packageName.startsWith("io.github.mbanucu.samples.a11yprobe")) {
+        // getPackageName() is the canonical or legacy app id, depending on which
+        // APK this class was installed in.
+        if (packageName.startsWith(getPackageName())) {
             return;
         }
         String line = packageName + " " + eventType(event.getEventType())

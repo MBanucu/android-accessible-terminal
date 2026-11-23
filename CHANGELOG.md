@@ -10,6 +10,15 @@ and this project adheres to
 
 ### Added
 
+- The accessibility probe is a first-class module, `a11y-probe/`, with package
+  `io.github.mbanucu.a11yprobe`, version `1.0.0` in its manifest, action
+  `io.github.mbanucu.a11yprobe.COMMAND`, and its own `build.sh`. The build writes
+  `out/a11y-probe-1.0.0.apk` and its `.sha256`; the release workflow attaches both
+  to the GitHub release and names the version in the notes. `probe.sh` installs,
+  enables, disables, reports status/version, and restores the previous
+  `enabled_accessibility_services` byte for byte. The old
+  `io.github.mbanucu.samples.a11yprobe` package is kept as a one-release legacy
+  APK, and the old action is still accepted by the new one.
 - `screenstream` is published to Maven Central as `io.github.mbanucu:screenstream`,
   signed, through the repository's own `publish.sh` (build, sign, checksum, bundle,
   upload, and `--status`/`--publish` for the deployment). 0.1.0 came from

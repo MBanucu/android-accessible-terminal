@@ -29,12 +29,18 @@ set -u
 
 ADB=${ADB:-adb}
 APP=io.github.mbanucu.samples.nativeterminal
-PROBE=io.github.mbanucu.samples.a11yprobe
+PROBE=io.github.mbanucu.a11yprobe
+# The promoted probe is its own module with a version in its manifest. The old
+# samples.a11yprobe app id is only named here so --restore can remove it from a
+# phone that still has the one-release compatibility APK enabled.
+PROBE_LEGACY=io.github.mbanucu.samples.a11yprobe
+PROBE_VERSION=$(sed -n 's/.*android:versionName="\([^"]*\)".*/\1/p' \
+    "$(cd "$(dirname "$0")" && pwd)/../a11y-probe/AndroidManifest.xml" | head -n 1)
 # The stream is its own repository and its own package; the probe only depends on
 # it, so the component adb starts is named after the module, not after the app.
 STREAM_ACTIVITY=io.github.mbanucu.screenstream.ScreenStreamActivity
 APK=samples/out/native-terminal.apk
-PROBE_APK=samples/out/a11y-probe.apk
+PROBE_APK=${PROBE_APK:-$(cd "$(dirname "$0")" && pwd)/../out/a11y-probe-$PROBE_VERSION.apk}
 FILES=/sdcard/Android/data/$APP/files
 PROBE_FILES=/sdcard/Android/data/$PROBE/files
 RESTORE_ONLY=0
@@ -182,6 +188,8 @@ WATCHED=$here/out/watched.txt
 STATE_FILE=$here/out/device-state.txt
 RUN_STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 TIMING_LOG=$here/out/e2e-timings.log
+# --list exits before the install, so the output directory may not exist yet.
+mkdir -p "$here/out"
 : > "$TIMING_LOG"
 SAVED_SIZE=""
 SAVED_SERVICES=""
@@ -307,9 +315,10 @@ restore_only() {
     services=$(read_secure_setting enabled_accessibility_services)
     case "$services" in
         ''|null) ;;
-        *"$PROBE/.ProbeService"*)
+        *"$PROBE/.ProbeService"*|*"$PROBE_LEGACY/.ProbeService"*)
             remaining=$(printf '%s' "$services" | tr ':' '\n' \
-                | grep -vxF "$PROBE/.ProbeService" | tr '\n' ' ')
+                | grep -vxF -e "$PROBE/.ProbeService" -e "$PROBE_LEGACY/.ProbeService" \
+                | tr '\n' ' ')
             remaining=${remaining% }
             remaining=${remaining// /:}
             if [ -n "$remaining" ]; then

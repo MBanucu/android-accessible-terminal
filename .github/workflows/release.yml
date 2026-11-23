@@ -1,9 +1,10 @@
 name: release
 
-# Publishes a tag to Maven Central through the Central Portal. The secrets are
-# a Central Portal user token and a PGP key; see RELEASING.md for how to create
-# them. Publishing a GitHub release starts this; workflow_dispatch exists so a
-# failed run can be retried for the same version.
+# Publishes a tag to Maven Central through the Central Portal and attaches the
+# accessibility probe APK to the GitHub release. The Maven secrets are a Central
+# Portal user token and a PGP key; see RELEASING.md for how to create them.
+# Publishing a GitHub release starts this; workflow_dispatch exists so a failed
+# run can be retried for the same version.
 on:
   release:
     types: [published]
@@ -72,3 +73,92 @@ jobs:
           version="${version#v}"
           echo "publishing $version"
           ./gradlew --no-daemon publishAggregationToCentralPortal -PVERSION_NAME="$version"
+
+  a11y-probe:
+    name: publish the accessibility probe
+    runs-on: ubuntu-24.04
+    # Uploading release assets and editing the release notes need a write token.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK
+        run: |
+          sdk="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          manager=$(command -v sdkmanager || echo "$sdk/cmdline-tools/latest/bin/sdkmanager")
+          yes | "$manager" --licenses >/dev/null 2>&1 || true
+          "$manager" "platforms;android-35" "build-tools;35.0.0" >/dev/null
+          # The probe build is the SDK's tools, not Gradle, so they have to be on
+          # PATH rather than only installed.
+          echo "$sdk/build-tools/35.0.0" >>"$GITHUB_PATH"
+
+      - name: Build the probe
+        env:
+          ADB_CONNECT: '0'
+        run: |
+          set -euo pipefail
+          bash a11y-probe/build.sh
+          (cd out && sha256sum -c a11y-probe-*.apk.sha256)
+          ls -l out/a11y-probe-*.apk out/a11y-probe-*.apk.sha256
+
+      # A dispatch run has no release to attach to; the files are still kept for
+      # a manual check of the artifact.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: a11y-probe
+          path: |
+            out/a11y-probe-*.apk
+            out/a11y-probe-*.apk.sha256
+          if-no-files-found: error
+
+      - name: Upload the APK and checksums to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.release.tag_name }}"
+          gh release upload "$tag" \
+            out/a11y-probe-*.apk out/a11y-probe-*.apk.sha256 --clobber
+
+      - name: Name the probe version in the release notes
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.release.tag_name }}"
+          version=$(sed -n 's/.*android:versionName="\([^"]*\)".*/\1/p' \
+            a11y-probe/AndroidManifest.xml | head -n 1)
+          body=$(gh release view "$tag" --json body -q .body)
+          if printf '%s\n' "$body" | grep -q '^### Accessibility probe'; then
+            echo "the release notes already name the probe"
+            exit 0
+          fi
+          {
+            printf '%s\n\n' "$body"
+            cat <<EOF
+          ### Accessibility probe
+
+          This release carries a11y-probe-$version.apk and its .sha256, the
+          accessibility service device suites drive apps with.
+
+          The one-release compatibility APK is a11y-probe-$version-legacy.apk
+          (app id io.github.mbanucu.samples.a11yprobe).
+
+              sha256sum -c a11y-probe-$version.apk.sha256
+              adb install -r a11y-probe-$version.apk
+
+          probe.sh from this tag installs, enables, disables and restores the
+          accessibility setting; see the README.
+          EOF
+          } > "$RUNNER_TEMP/release-notes.md"
+          gh release edit "$tag" --notes-file "$RUNNER_TEMP/release-notes.md"

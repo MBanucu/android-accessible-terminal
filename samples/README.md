@@ -1,18 +1,19 @@
 # Sample apps
 
-Two small apps that prove the [terminal view](../terminal) against a real device:
-one host app and the accessibility service the checks drive it with.
-
-They are deliberately not Gradle modules: on the device this repository was
-extracted on, Gradle's `aapt2` has no aarch64 build, and a sample should be a
-directory of files you can read. `build.sh` does what Gradle would do — `aapt2
-link`, `javac`, `d8`, zip in the dex and the native library, `zipalign`,
-`apksigner` — and needs only an Android SDK.
+The native-terminal app, and the accessibility probe the checks drive it with.
+The probe is a first-class module now — [`../a11y-probe`](../a11y-probe) — with
+its own version and release artifact; this directory keeps the sample app and the
+suite. The sample app is deliberately not a Gradle module: on the device this
+repository was extracted on, Gradle's `aapt2` has no aarch64 build, and a sample
+should be a directory of files you can read. `build.sh` does what Gradle would do
+— `aapt2 link`, `javac`, `d8`, zip in the dex and the native library,
+`zipalign`, `apksigner` — and needs only an Android SDK.
 
 ```bash
-bash samples/build.sh all            # native-terminal and a11y-probe
+bash samples/build.sh all            # native-terminal and the probe
 bash samples/build.sh native-terminal
-bash samples/build.sh a11y-probe
+bash samples/build.sh a11y-probe     # compatibility: runs ../a11y-probe/build.sh
+bash a11y-probe/build.sh             # -> out/a11y-probe-<version>.apk
 ```
 
 Conventions the script relies on, so no build file is needed:
@@ -157,12 +158,24 @@ Each takes an extra on the launch intent:
 
 ## a11y-probe — the service the suite acts with
 
+The probe lives in [`../a11y-probe`](../a11y-probe) now, as package
+`io.github.mbanucu.a11yprobe` with version `1.0.0` in its manifest. It is
+published on its own: the release workflow attaches `a11y-probe-<version>.apk`
+and its `.sha256`, and [`../probe.sh`](../probe.sh) installs, enables and
+disables it. `samples/e2e.sh` uses the versioned APK from `out/`.
+
 `ProbeService` is an `AccessibilityService` that dumps the tree of a target
 package and performs actions on its nodes. `ProbeCommand` reads a command file
 and writes the answer; `MainActivity` is only the settings screen to enable the
 service by hand. Every check in `e2e.sh` — `ACTION_SET_TEXT`, a focus, a scroll,
 a node dump — goes through this app, so nothing taps a coordinate or types with
 `input text`.
+
+The old `io.github.mbanucu.samples.a11yprobe` app id is kept for one release:
+`out/a11y-probe-<version>-legacy.apk` is the same code under that package, with
+its old `.ProbeService` component, and the new APK still accepts the old
+`.COMMAND` action. The transition is documented in the
+[main README](../README.md#the-accessibility-probe).
 
 It also takes the screenshots the pixel checks assert on (`PixelWatch`): the
 service declares `canTakeScreenshot`, and a `--es pixels` command starts a watch
@@ -192,8 +205,8 @@ device, and sent only when the screen changes. Anything on the phone attaches to
 
 ```bash
 # Consent. The app-op is the quiet way and needs no screen reader:
-adb shell appops set io.github.mbanucu.samples.a11yprobe PROJECT_MEDIA allow
-adb shell am start -n io.github.mbanucu.samples.a11yprobe/io.github.mbanucu.screenstream.ScreenStreamActivity
+adb shell appops set io.github.mbanucu.a11yprobe PROJECT_MEDIA allow
+adb shell am start -n io.github.mbanucu.a11yprobe/io.github.mbanucu.screenstream.ScreenStreamActivity
 # Or let the probe accept the system dialog itself, as a screen reader would:
 # with the probe enabled, start the same activity and it clicks "Start".
 
@@ -234,7 +247,7 @@ from a screenshot: a stream says what changed, and a check that begins while the
 app is already drawn (a caret that does not blink) would otherwise have nothing to
 look at. That first frame carries the number of the last frame the source sent,
 which is still what the display shows. A capture started this way is stopped with
-`am start -n io.github.mbanucu.samples.a11yprobe/io.github.mbanucu.screenstream.ScreenStreamActivity --ez stop true`;
+`am start -n io.github.mbanucu.a11yprobe/io.github.mbanucu.screenstream.ScreenStreamActivity --ez stop true`;
 the app-op can then go back to `default`. A tap holds the same frame as the sockets (the
 buffer goes back to the pool when the last holder lets go), so a watch and a
 consumer can read at once; `taps` in `files/screenstream.txt` counts them. The default

@@ -3,6 +3,7 @@ build/
 local.properties
 terminal/out/
 samples/out/
+/out/
 *.apk
 *.idsig
 

@@ -1,4 +1,4 @@
-package io.github.mbanucu.samples.a11yprobe;
+package io.github.mbanucu.a11yprobe;
 
 import android.accessibilityservice.AccessibilityService;
 import android.graphics.Bitmap;

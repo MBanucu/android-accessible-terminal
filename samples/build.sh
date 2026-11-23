@@ -3,6 +3,7 @@
 #
 #   bash samples/build.sh native-terminal
 #   bash test/local-build.sh --samples   # builds them all, then runs their checks
+#   bash samples/build.sh a11y-probe     # compatibility: ../a11y-probe/build.sh
 #
 # The point of these samples is to be readable and runnable on the device this
 # repository was written on, where Gradle's aapt2 has no aarch64 build. The steps
@@ -102,7 +103,13 @@ case "$app" in
     all)
         shift
         bash "$here/build.sh" native-terminal
-        exec bash "$here/build.sh" a11y-probe "$@"
+        exec bash "$root/a11y-probe/build.sh" "$@"
+        ;;
+    a11y-probe)
+        # Promoted to a first-class module with its own version and release
+        # artifact. This path stays so the old command keeps working.
+        shift
+        exec bash "$root/a11y-probe/build.sh" "$@"
         ;;
     test|--test)
         shift

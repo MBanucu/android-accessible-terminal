@@ -170,6 +170,7 @@ with zipfile.ZipFile(base) as src, zipfile.ZipFile(out, 'w') as dst:
 EOF
     zipalign -f 4 "$work/unaligned.apk" "$work/aligned.apk"
     keystore=$HOME/.android/debug.keystore
+    mkdir -p "$(dirname "$keystore")"
     [ -f "$keystore" ] || keytool -genkeypair -keystore "$keystore" -storepass android \
         -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 \
         -validity 10000 -dname 'CN=Android Debug,O=Android,C=US' >/dev/null

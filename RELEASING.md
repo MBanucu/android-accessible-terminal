@@ -87,6 +87,29 @@ gh workflow run release.yml --ref 0.2.0 -f version=0.2.0
 Run it from the tag, not from `main`: the workflow checks out that ref, and the
 version and the code must belong together.
 
+### The accessibility probe artifact
+
+The same release workflow builds the probe with `bash a11y-probe/build.sh` and
+attaches these files to the GitHub release:
+
+| asset | what it is |
+|---|---|
+| `a11y-probe-1.0.0.apk` | the probe, app id `io.github.mbanucu.a11yprobe`, debug-signed |
+| `a11y-probe-1.0.0.apk.sha256` | its checksum |
+| `a11y-probe-1.0.0-legacy.apk` | the same code under the old `io.github.mbanucu.samples.a11yprobe` app id, for one release |
+| `a11y-probe-1.0.0-legacy.apk.sha256` | its checksum |
+
+The job also appends an "Accessibility probe" section to the release notes when
+it is missing, naming the version the manifest built. A manual
+`workflow_dispatch` run has no release to attach to, so it uploads the same files
+as the `a11y-probe` workflow artifact instead. The probe's version comes from
+[`a11y-probe/AndroidManifest.xml`](a11y-probe/AndroidManifest.xml), not from the
+Maven tag; bump it there when the probe changes incompatibly.
+
+Users verify with `sha256sum -c a11y-probe-1.0.0.apk.sha256` (run in the
+directory holding the two files) and install with
+`adb install -r a11y-probe-1.0.0.apk`.
+
 Publishing is `AUTOMATIC`: the workflow uploads the bundle, the portal validates
 it, and it goes to Maven Central without another press. Watch **Deployments**
 until the row reads `PUBLISHED`; validation takes a few minutes and the
@@ -125,3 +148,7 @@ unzip -l build/nmcp/zip/aggregation.zip
 jar, a javadoc jar, Gradle module metadata, the POM and a `.asc` signature for
 each. The POM carries the name, description, GPL-3.0-or-later license, developer
 and SCM entries Central requires.
+
+The GitHub release also carries the accessibility probe APKs and checksums
+described above. They are not on Maven Central: an APK is installed, not a
+dependency, and the probe is a test tool rather than a library.

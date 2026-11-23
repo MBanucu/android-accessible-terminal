@@ -1,4 +1,4 @@
-package io.github.mbanucu.samples.a11yprobe;
+package io.github.mbanucu.a11yprobe;
 
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -10,18 +10,24 @@ import android.widget.Toast;
  * The probe's commands, so a test can act like a screen reader without a UI:
  *
  * <pre>
- * am broadcast -a io.github.mbanucu.samples.a11yprobe.COMMAND \
+ * am broadcast -a io.github.mbanucu.a11yprobe.COMMAND \
  *     --es dump tree --es find "$ " --es text "echo hi"
- * am broadcast -a io.github.mbanucu.samples.a11yprobe.COMMAND --es pkg APP \
+ * am broadcast -a io.github.mbanucu.a11yprobe.COMMAND --es pkg APP \
  *     --es pixels colour --es region 0,150,1440,900 \
  *     --es colours "red,150,255,0,109,0,109,200"
+ * am broadcast -a io.github.mbanucu.a11yprobe.COMMAND --es version true
  * </pre>
  *
  * {@code dump} names the file, {@code find} picks the node, {@code text} is what
  * SET_TEXT types, {@code pixels} starts a pixel watch that answers in its own
- * file. Answers go to files/actions.txt and to the log.
+ * file. {@code version} reports the installed version so a harness can refuse a
+ * probe it does not know. Answers go to files/actions.txt and to the log; the
+ * version also goes to files/version.txt.
+ *
+ * <p>The old {@code io.github.mbanucu.samples.a11yprobe.COMMAND} action is still
+ * declared by the manifest for one release.
  */
-public final class ProbeCommand extends BroadcastReceiver {
+public class ProbeCommand extends BroadcastReceiver {
 
     private static final String TAG = "A11yProbe";
 
@@ -38,6 +44,7 @@ public final class ProbeCommand extends BroadcastReceiver {
         String pixels = intent.getStringExtra("pixels");
         boolean focusRow = intent.getBooleanExtra("focusRow", false);
         String eventType = intent.getStringExtra("event");
+        String version = intent.getStringExtra("version");
         long waitMs = intent.getLongExtra("waitMs", 5000);
         // Sent from adb as a literal \n, meaning "and press enter".
         if (text != null) {
@@ -45,7 +52,12 @@ public final class ProbeCommand extends BroadcastReceiver {
         }
         ProbeService.setTarget(intent.getStringExtra("pkg"));
         final String result;
-        if (pixels != null) {
+        if (intent.getBooleanExtra("version", false)
+                || "true".equalsIgnoreCase(version) || "version".equalsIgnoreCase(version)) {
+            // A harness pins the version the way it pins adb-harness: ask the app,
+            // not the APK filename, so a stale install cannot look current.
+            result = ProbeService.version(context);
+        } else if (pixels != null) {
             // The screenshots, the frame numbering and the counting all happen on
             // this side; the test only polls the file this answers in.
             result = PixelWatch.start(ProbeService.instance, pixels,

@@ -50,6 +50,34 @@ jobs:
       # catches a missing sources or javadoc jar before a tag does.
       - run: ./gradlew --no-daemon nmcpZipAggregation
 
+  a11y-probe:
+    name: build the accessibility probe
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Android SDK
+        run: |
+          sdk="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          manager=$(command -v sdkmanager || echo "$sdk/cmdline-tools/latest/bin/sdkmanager")
+          yes | "$manager" --licenses >/dev/null 2>&1 || true
+          "$manager" "platforms;android-35" "build-tools;35.0.0" >/dev/null
+          echo "$sdk/build-tools/35.0.0" >>"$GITHUB_PATH"
+      # No device and no Gradle: the same build the release workflow attaches to
+      # a tag, including the legacy package and both checksums.
+      - name: Build
+        env:
+          ADB_CONNECT: '0'
+        run: |
+          set -euo pipefail
+          bash -n a11y-probe/build.sh
+          bash -n probe.sh
+          bash a11y-probe/build.sh
+          (cd out && sha256sum -c a11y-probe-*.apk.sha256)
+
   e2e:
     name: e2e suite (device)
     # The suite drives a real phone: adb, an accessibility service, a pty and a

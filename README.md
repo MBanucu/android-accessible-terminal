@@ -57,6 +57,83 @@ the DejaVu Sans Mono the samples ship — and falls back to the system monospace
 when it is not. A sample copy is in
 [`samples/native-terminal/assets/`](samples/native-terminal/assets).
 
+## The accessibility probe
+
+[samples/e2e.sh](samples/e2e.sh) drives the view with an `AccessibilityService`
+rather than a coordinate tap or `input text`. That service is published on its
+own, so a device suite in another repository can use it without copying this
+repository or building its samples:
+
+- app id `io.github.mbanucu.a11yprobe`, versioned in its manifest;
+- version `1.0.0` of the APK, with a `.sha256` beside it, on every GitHub
+  release;
+- commands under `io.github.mbanucu.a11yprobe.COMMAND`;
+- [`probe.sh`](probe.sh), which saves and restores the accessibility setting.
+
+Download the APK and the wrapper from a release tag (replace `<tag>` with the
+release, for example `0.3.0`):
+
+```bash
+tag=0.3.0
+gh release download "$tag" --pattern 'a11y-probe-*'
+curl -LO "https://raw.githubusercontent.com/MBanucu/android-accessible-terminal/$tag/probe.sh"
+
+sha256sum -c a11y-probe-1.0.0.apk.sha256
+adb install -r a11y-probe-1.0.0.apk
+# or, since probe.sh looks in the directory it is run from:
+bash probe.sh install
+
+bash probe.sh enable
+bash probe.sh status           # package, version, version-match, enabled
+```
+
+`probe.sh` reads the version from the APK's filename when it is run outside a
+checkout, so the three downloaded files are enough. Set `PROBE_VERSION=1.0.0`
+if the APK was renamed.
+
+The same files with `curl` instead of `gh`:
+
+```bash
+curl -LO "https://github.com/MBanucu/android-accessible-terminal/releases/download/$tag/a11y-probe-1.0.0.apk"
+curl -LO "https://github.com/MBanucu/android-accessible-terminal/releases/download/$tag/a11y-probe-1.0.0.apk.sha256"
+sha256sum -c a11y-probe-1.0.0.apk.sha256
+adb install -r a11y-probe-1.0.0.apk
+```
+
+With the service enabled, a command dumps the accessibility tree of the window in
+front and writes it to the app's own external files directory:
+
+```bash
+adb shell am broadcast -a io.github.mbanucu.a11yprobe.COMMAND --es dump tree
+adb shell cat /sdcard/Android/data/io.github.mbanucu.a11yprobe/files/tree.txt
+
+# The version the installed app reports, for a harness that pins it.
+adb shell am broadcast -a io.github.mbanucu.a11yprobe.COMMAND --es version true
+adb shell cat /sdcard/Android/data/io.github.mbanucu.a11yprobe/files/version.txt
+bash probe.sh version          # exits 1 when installed and expected differ
+```
+
+`probe.sh disable` restores `enabled_accessibility_services` (and
+`accessibility_enabled`) to the exact value it found, including `none` or an
+unset (`null`) setting. The saved value is kept on disk, so `bash probe.sh
+restore` repairs a run that was killed before its cleanup.
+
+The one-release compatibility names are still there: the new APK accepts
+`io.github.mbanucu.samples.a11yprobe.COMMAND`, and
+`out/a11y-probe-1.0.0-legacy.apk` (also attached to the release) keeps the old
+`io.github.mbanucu.samples.a11yprobe` app id and `.ProbeService` component for a
+phone that still has a harness pinned to it. Use `bash probe.sh --legacy install`
+and `bash probe.sh --legacy enable` to drive that APK.
+
+> **Security boundary.** An accessibility service can read every window on the
+> phone and perform actions on its nodes. The probe is a test tool, not a screen
+> reader to leave on: use a test device, expect it to write only under its own
+> external files directory
+> (`/sdcard/Android/data/io.github.mbanucu.a11yprobe/files`), and disable it when
+> the run is over. `probe.sh enable` adds the probe to the list rather than
+> replacing a screen reader the owner already uses, and `probe.sh disable` puts
+> the list back.
+
 ## Building from source
 
 `bash terminal/test.sh` runs the JVM suites with nothing but a `javac` — no SDK,
@@ -175,19 +252,20 @@ input modes and query replies.
 `TerminalView` and `TerminalAccessibility` import `android.*` and need
 `android.jar`; the view is covered on a device by the sample suite.
 
-The demos are two apps under `samples/`, built without Gradle:
+The demo app under `samples/` and the probe module are built without Gradle:
 
 ```bash
-bash samples/build.sh all            # -> samples/out/native-terminal.apk and a11y-probe.apk
+bash a11y-probe/build.sh             # -> out/a11y-probe-1.0.0.apk and .sha256
+bash samples/build.sh all            # native-terminal, and the probe via its build.sh
 bash samples/e2e.sh                  # the fast checks, APK already installed
 bash samples/e2e.sh --opencode       # also drive opencode's TUI (slow)
 ```
 
 `samples/native-terminal` runs the view against an app-owned `forkpty` PTY or a
-Termux `RUN_COMMAND` session; `samples/a11y-probe` is the `AccessibilityService`
-the suite drives the apps with. `samples/e2e.sh` lists its checks with
-`--list`, runs one with `--only <name>`, and puts the accessibility settings
-back afterwards.
+Termux `RUN_COMMAND` session; [`a11y-probe/`](a11y-probe) is the
+`AccessibilityService` the suite drives the apps with, and `samples/e2e.sh` lists
+its checks with `--list`, runs one with `--only <name>`, and puts the
+accessibility settings back afterwards.
 
 ## What it is not
 

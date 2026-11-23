@@ -196,9 +196,7 @@ public class ProbeCommand extends BroadcastReceiver {
             later("wait_idle " + idle, () -> {
                 String answer = ProbeService.waitIdle(idle, timeoutMs);
                 ProbeService.writeReplace("idle.txt", answer);
-                return answer.startsWith("timeout")
-                        ? ProbeReply.state(answer, "timeout")
-                        : ProbeReply.state(answer, "idle");
+                return idleReply(answer);
             });
             return;
         } else if (text != null) {
@@ -217,6 +215,23 @@ public class ProbeCommand extends BroadcastReceiver {
         ProbeService.write("actions.txt", "command find=" + find + " text=" + text + " -> "
                 + result + "\n");
         Toast.makeText(context, result, Toast.LENGTH_SHORT).show();
+    }
+
+    /**
+     * A wait-idle broadcast answer. Only a real idle is state=idle: a service
+     * that went away or an interrupted wait must not look like a settled screen.
+     */
+    private static ProbeReply idleReply(String answer) {
+        if (answer.startsWith("idle")) {
+            return ProbeReply.state(answer, "idle");
+        }
+        if (answer.startsWith("timeout")) {
+            return ProbeReply.state(answer, "timeout");
+        }
+        if (answer.startsWith("interrupted")) {
+            return ProbeReply.error("the wait was interrupted");
+        }
+        return ProbeReply.error(answer.strip());
     }
 
     /**

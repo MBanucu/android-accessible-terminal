@@ -27,6 +27,9 @@ public final class ProbeProtocolTest {
         batchParsing();
         arguments();
         repliesAndResults();
+        selectors();
+        expectations();
+        nodeFormatting();
 
         System.out.println();
         System.out.println((passed + failed) + " checks, " + failed + " failed");
@@ -201,6 +204,239 @@ public final class ProbeProtocolTest {
         check("results: oldest evicted", "false", String.valueOf(results.has("a")));
         check("results: newest kept", "true", String.valueOf(results.has("c")));
         check("results: size stays bounded", "2", String.valueOf(results.size()));
+    }
+
+    // --- selectors ----------------------------------------------------------
+
+    private static void selectors() {
+        ProbeSelector text = ProbeSelector.parse("text=OK");
+        check("selector: text kind", "TEXT", text.kind().name());
+        check("selector: text value", "OK", text.value());
+        check("selector: text label", "text=OK", text.label());
+
+        ProbeSelector desc = ProbeSelector.parse("desc=Close");
+        check("selector: desc kind", "DESC", desc.kind().name());
+        check("selector: desc label", "desc=Close", desc.label());
+
+        ProbeSelector id = ProbeSelector.parse("id=io.example:id/row");
+        check("selector: id kind", "ID", id.kind().name());
+        check("selector: id value", "io.example:id/row", id.value());
+
+        ProbeSelector index = ProbeSelector.parse("index=2");
+        check("selector: index kind", "INDEX", index.kind().name());
+        check("selector: index number", "2", String.valueOf(index.index()));
+        check("selector: index label", "index=2", index.label());
+
+        ProbeSelector bare = ProbeSelector.parse("OK");
+        check("selector: bare kind", "ANY", bare.kind().name());
+        check("selector: bare label names its fields", "text|desc|id=OK", bare.label());
+
+        check("selector: a value may contain equals", "a=b",
+                ProbeSelector.parse("text=a=b").value());
+
+        try {
+            ProbeSelector.parse("nope=1");
+            check("selector: unknown prefix is an error", "exception", "accepted");
+        } catch (IllegalArgumentException expected) {
+            check("selector: unknown prefix names the selectors", "true",
+                    String.valueOf(expected.getMessage().contains(
+                            "selectors: text=, desc=, id=, index=")));
+        }
+        try {
+            ProbeSelector.parse("index=x");
+            check("selector: index must be a number", "exception", "accepted");
+        } catch (IllegalArgumentException expected) {
+            check("selector: index number message", "true",
+                    String.valueOf(expected.getMessage().contains("whole number")));
+        }
+        try {
+            ProbeSelector.parse("index=-1");
+            check("selector: index is zero-based", "exception", "accepted");
+        } catch (IllegalArgumentException expected) {
+            check("selector: index negative message", "true",
+                    String.valueOf(expected.getMessage().contains("zero-based")));
+        }
+        try {
+            ProbeSelector.parse("text=");
+            check("selector: a named value is required", "exception", "accepted");
+        } catch (IllegalArgumentException expected) {
+            check("selector: empty text message", "true",
+                    String.valueOf(expected.getMessage().contains("needs a value")));
+        }
+
+        List<ProbeNode> nodes = List.of(
+                node("android.widget.TextView", "OK", "Close", "io.example:id/ok"),
+                node("android.widget.TextView", "Item 01", "Row 01", "io.example:id/item01"),
+                node("android.widget.TextView", "Ready", "Fixture status", null));
+        check("selector: text matches", "true",
+                String.valueOf(ProbeSelector.parse("text=OK").matches(nodes.get(0))));
+        check("selector: text misses a description", "false",
+                String.valueOf(ProbeSelector.parse("text=Close").matches(nodes.get(0))));
+        check("selector: desc matches", "true",
+                String.valueOf(ProbeSelector.parse("desc=Close").matches(nodes.get(0))));
+        check("selector: id matches", "true",
+                String.valueOf(ProbeSelector.parse("id=item01").matches(nodes.get(1))));
+        check("selector: bare matches a description", "true",
+                String.valueOf(ProbeSelector.parse("Fixture status").matches(nodes.get(2))));
+        check("selector: bare misses", "false",
+                String.valueOf(ProbeSelector.parse("nope").matches(nodes.get(2))));
+        check("selector: index picks its position", "1",
+                String.valueOf(ProbeSelector.parse("index=1").matchingIndexes(nodes).get(0)));
+        check("selector: an index out of range matches nothing", "0",
+                String.valueOf(ProbeSelector.parse("index=9").matchingIndexes(nodes).size()));
+        check("selector: matched field is text", "text",
+                ProbeSelector.parse("text=OK").matchedField(nodes.get(0)));
+        check("selector: matched field is desc", "desc",
+                ProbeSelector.parse("desc=Close").matchedField(nodes.get(0)));
+        check("selector: matched field is id", "id",
+                ProbeSelector.parse("id=item01").matchedField(nodes.get(1)));
+        check("selector: bare reports the first field", "desc",
+                ProbeSelector.parse("Close").matchedField(nodes.get(0)));
+
+        check("selector: closest puts the shared prefix first", "Item 01",
+                ProbeSelector.parse("text=Item 40").closest(nodes, 1).get(0).text);
+        check("selector: no nodes is an explained empty list",
+                "(none: 0 nodes scanned)",
+                ProbeSelector.parse("text=x").candidates(List.of()));
+        check("selector: an out-of-range index lists neighbours", "3",
+                String.valueOf(ProbeSelector.parse("index=9")
+                        .closest(nodes, 3).size()));
+    }
+
+    // --- assertions ---------------------------------------------------------
+
+    private static void expectations() {
+        List<ProbeNode> nodes = List.of(
+                new ProbeNode(0, "android.widget.FrameLayout", null, null, null,
+                        0, 0, 1080, 2400, List.of(), false, false, false, false),
+                node("android.widget.TextView", "Item 01", "Row 01", "io.example:id/item01"),
+                node("android.widget.TextView", "Ready", "Fixture status",
+                        "io.example:id/status"),
+                node("android.widget.TextView", "Saved: draft", null, null));
+
+        ProbeReply exists = expect("exists", "text=Ready", null, nodes);
+        check("expect: exists code", "0", String.valueOf(exists.code));
+        check("expect: exists names the match", "true",
+                String.valueOf(exists.data.contains("matched") && exists.data.contains("Ready")));
+
+        ProbeReply missing = expect("exists", "text=Missing", null, nodes);
+        check("expect: exists failure code", "400", String.valueOf(missing.code));
+        check("expect: exists names the selector", "true",
+                String.valueOf(missing.data.contains("expect exists text=Missing")));
+        check("expect: exists lists candidates", "true",
+                String.valueOf(missing.data.contains("closest:")));
+
+        ProbeReply absent = expect("absent", "text=Missing", null, nodes);
+        check("expect: absent code", "0", String.valueOf(absent.code));
+        check("expect: absent says it scanned", "true",
+                String.valueOf(absent.data.contains("no node matched (4 scanned)")));
+
+        ProbeReply present = expect("absent", "text=Ready", null, nodes);
+        check("expect: absent failure code", "400", String.valueOf(present.code));
+        check("expect: absent shows the matched node", "true",
+                String.valueOf(present.data.contains("first:") && present.data.contains("Ready")));
+
+        ProbeReply exact = expect("text_is", "text=Ready", null, nodes);
+        check("expect: text_is code", "0", String.valueOf(exact.code));
+        check("expect: text_is names the node", "true",
+                String.valueOf(exact.data.contains("text exactly 'Ready'")));
+
+        ProbeReply notExact = expect("text_is", "text=Read", null, nodes);
+        check("expect: text_is is exact, not contains", "400",
+                String.valueOf(notExact.code));
+        check("expect: text_is failure says exactly", "true",
+                String.valueOf(notExact.data.contains("text exactly 'Read'")));
+
+        ProbeReply contains = expect("text_contains", "text=draft", null, nodes);
+        check("expect: text_contains code", "0", String.valueOf(contains.code));
+
+        ProbeReply notContains = expect("text_contains", "text=saved", null, nodes);
+        check("expect: case is kept", "400", String.valueOf(notContains.code));
+        check("expect: a miss lists closest", "true",
+                String.valueOf(notContains.data.contains("Saved: draft")));
+
+        ProbeReply needsValue = expect("text_is", "desc=Fixture status", null, nodes);
+        check("expect: a desc selector needs a value", "400",
+                String.valueOf(needsValue.code));
+        check("expect: the value message names the flag", "true",
+                String.valueOf(needsValue.data.contains("--extra value:s:<text>")));
+
+        ProbeReply byId = expect("text_is", "id=io.example:id/status", "Ready", nodes);
+        check("expect: id plus value", "0", String.valueOf(byId.code));
+
+        ProbeReply byIdContains = expect("text_contains", "id=io.example:id/item01",
+                "Item", nodes);
+        check("expect: id plus contains", "0", String.valueOf(byIdContains.code));
+
+        ProbeReply unknown = expect("bogus", "text=Ready", null, nodes);
+        check("expect: unknown assertion code", "400", String.valueOf(unknown.code));
+        check("expect: unknown assertion lists the four", "true",
+                String.valueOf(unknown.data.contains(
+                        "exists, absent, text_is, text_contains")));
+
+        check("expect: assertion names are case-insensitive", "true",
+                String.valueOf(ProbeExpect.isAssertion("TEXT_CONTAINS")));
+        check("expect: a selector is not an assertion", "false",
+                String.valueOf(ProbeExpect.isAssertion("text=Ready")));
+
+        ProbeExpect.Request compact = ProbeExpect.request("text_contains=saved", null);
+        check("expect: compact assertion", "text_contains", compact.assertion);
+        check("expect: compact selector", "saved", compact.selector);
+        ProbeExpect.Request compound = ProbeExpect.request("absent=text=Item 01", null);
+        check("expect: compact assertion with a selector", "absent", compound.assertion);
+        check("expect: compact selector keeps key=value", "text=Item 01", compound.selector);
+        ProbeExpect.Request explicit = ProbeExpect.request("saved", "text_is");
+        check("expect: explicit assertion", "text_is", explicit.assertion);
+        check("expect: explicit selector", "saved", explicit.selector);
+        ProbeExpect.Request plain = ProbeExpect.request("text=Ready", null);
+        check("expect: a plain selector defaults to exists", "exists", plain.assertion);
+        try {
+            ProbeExpect.request("text=Ready", "bogus");
+            check("expect: an explicit assertion is checked", "exception", "accepted");
+        } catch (IllegalArgumentException expected) {
+            check("expect: explicit assertion message", "true",
+                    String.valueOf(expected.getMessage().contains("unknown assertion")));
+        }
+    }
+
+    // --- node formatting ----------------------------------------------------
+
+    private static void nodeFormatting() {
+        ProbeNode node = new ProbeNode(1, "android.widget.TextView", "hello", "a row",
+                "io.example:id/row", 0, 10, 1080, 60,
+                List.of("CLICK"), false, true, true, false);
+        check("node: brief keeps text", "true",
+                String.valueOf(node.brief().startsWith("text=hello")));
+        check("node: brief keeps the description", "true",
+                String.valueOf(node.brief().contains("desc=a row")));
+        check("node: brief keeps the id", "true",
+                String.valueOf(node.brief().contains("id=io.example:id/row")));
+        check("node: brief keeps bounds", "true",
+                String.valueOf(node.brief().contains("bounds=0,10,1080,60")));
+        check("node: describe names the id", "true",
+                String.valueOf(node.describe().contains("id=io.example:id/row")));
+        check("node: describe names the description", "true",
+                String.valueOf(node.describe().contains("desc=a row")));
+        check("node: a null field is a dash", "text=-", node("x", null, null, null).brief()
+                .replace(" desc=-", "").replace(" bounds=0,0,0,0", ""));
+        check("node: newlines are escaped", "a\\nb", ProbeNode.quote("a\nb"));
+
+        StringBuilder longText = new StringBuilder();
+        for (int i = 0; i < 200; i++) {
+            longText.append('x');
+        }
+        check("node: long text is cut and its length kept", "true",
+                String.valueOf(ProbeNode.quote(longText).endsWith("(200)")));
+    }
+
+    private static ProbeNode node(String className, String text, String desc, String id) {
+        return new ProbeNode(1, className, text, desc, id, 0, 0, 0, 0,
+                List.of(), false, false, false, false);
+    }
+
+    private static ProbeReply expect(String assertion, String selector, String value,
+            List<ProbeNode> nodes) {
+        return ProbeExpect.evaluate(assertion, ProbeSelector.parse(selector), value, nodes);
     }
 
     // --- reporting ----------------------------------------------------------

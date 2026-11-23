@@ -47,6 +47,18 @@ public final class ProbeNode {
         this.focused = focused;
     }
 
+    /**
+     * The short form a candidate list uses: the fields a selector looked at, and
+     * the bounds that say where the node was, without the action list a failure
+     * message does not need.
+     */
+    public String brief() {
+        return "text=" + quote(text)
+                + " desc=" + quote(contentDescription)
+                + (viewId == null ? "" : " id=" + viewId)
+                + " bounds=" + left + ',' + top + ',' + right + ',' + bottom;
+    }
+
     /** The one-line form {@code find} answers with, in the dump's own spelling. */
     public String describe() {
         StringBuilder out = new StringBuilder();

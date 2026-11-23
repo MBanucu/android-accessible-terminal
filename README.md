@@ -68,7 +68,9 @@ repository or building its samples:
 - version `1.0.0` of the APK, with a `.sha256` beside it, on every GitHub
   release;
 - a synchronous `content call` surface at
-  `content://io.github.mbanucu.a11yprobe.control`;
+  `content://io.github.mbanucu.a11yprobe.control`, with actions and assertions
+  (`scroll`, `key`, `long_click`, `clear`, `swipe`, `expect`, `wait_idle`) for a
+  general e2e suite;
 - the one-release broadcast action `io.github.mbanucu.a11yprobe.COMMAND`;
 - [`probe.sh`](probe.sh), which saves and restores the accessibility setting.
 
@@ -125,8 +127,11 @@ adb shell content call --uri $CONTROL --method status
 
 A rejection answers `code=400` with a sentence and does not stop the probe; a
 `wait` blocks for at most 9 seconds and needs `--extra id:s:<uuid>` plus
-`--extra async:z:true` with `--method result` to wait longer. The reply and JSON
-schemas, the batch grammar and the request-id form are in
+`--extra async:z:true` with `--method result` to wait longer. `scroll` can stop
+at a `until` selector, and `expect` returns `0`/`400` with the matched node or
+the closest candidates, so a shell check does not grep a dump. The reply and JSON
+schemas, selectors, assertions, the batch grammar, the fixture screen and the
+request-id form are in
 [`a11y-probe/README.md`](a11y-probe/README.md#synchronous-commands-content-call).
 
 The one-release broadcast still works:
@@ -169,7 +174,9 @@ and `bash probe.sh --legacy enable` to drive that APK.
 
 `bash terminal/test.sh` runs the JVM suites with nothing but a `javac` — no SDK,
 no Gradle, no device. `bash a11y-probe/test.sh` runs the probe's protocol tests
-the same way: the JSON dump, the batch grammar and the reply codes.
+the same way: the selectors, the assertions, the JSON dump, the batch grammar and
+the reply codes. `bash a11y-probe/probe-test.sh` is the device-only half: it
+drives every action against the probe's own fixture screen.
 
 `bash samples/build.sh all` builds both demo apps with the SDK's tools and no
 Gradle, and `bash samples/e2e.sh` drives them on a connected device. The first

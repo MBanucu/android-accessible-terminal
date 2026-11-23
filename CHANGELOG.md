@@ -28,6 +28,16 @@ and this project adheres to
   `json:z:true` returns one JSON object per node. The broadcast action and the old
   file names still work for one release. `bash a11y-probe/test.sh` runs the
   protocol tests on the JVM.
+- The probe can drive a general e2e suite: `scroll` with an optional `until`
+  selector, `key` (`back`, `home`, `enter`), `long_click`, `clear`, `swipe`,
+  `expect` (`exists`, `absent`, `text_is`, `text_contains`) and `wait_idle`,
+  with `text=`, `desc=`, `id=` and `index=` selectors. A failed selector names
+  the selector and lists the closest nodes, a failed `expect` is `code=400`, and
+  the dump prints the resource id and content description. The APK also carries
+  a built-in fixture activity (a lazy list, a text field and a dialog), and
+  `a11y-probe/probe-test.sh` exercises every action against it on a device; the
+  offline suite now covers the selector parser, the assertion verdicts and the
+  node encodings.
 - `screenstream` is published to Maven Central as `io.github.mbanucu:screenstream`,
   signed, through the repository's own `publish.sh` (build, sign, checksum, bundle,
   upload, and `--status`/`--publish` for the deployment). 0.1.0 came from

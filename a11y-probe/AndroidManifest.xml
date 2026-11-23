@@ -27,6 +27,16 @@
             </intent-filter>
         </activity>
 
+        <!-- The built-in fixture the probe tests itself against: a list, a text
+             field and a dialog, so an action can be checked without a terminal
+             app. Started by a11y-probe/probe-test.sh, and exported because adb
+             is a different uid from the app. -->
+        <activity
+            android:name=".ProbeFixtureActivity"
+            android:exported="true"
+            android:label="A11y probe fixture"
+            android:launchMode="singleTask" />
+
         <!-- The service a screen reader would be. It is what reads a terminal's
              accessibility tree and performs actions on it; enabling it with
              `settings put secure enabled_accessibility_services` needs no root. -->

@@ -34,6 +34,12 @@ PROBE=io.github.mbanucu.a11yprobe
 # samples.a11yprobe app id is only named here so --restore can remove it from a
 # phone that still has the one-release compatibility APK enabled.
 PROBE_LEGACY=io.github.mbanucu.samples.a11yprobe
+# The probe's synchronous surface. `content call` answers in the call and still
+# writes the named file, which is the one round trip the helpers below want. A
+# few commands (wait, set_text, click) are still sent as broadcasts here because
+# they are armed before an action in the same adb shell; the mapping is in
+# a11y-probe/README.md#migration-from-the-broadcast.
+PROBE_CONTROL=content://$PROBE.control
 PROBE_VERSION=$(sed -n 's/.*android:versionName="\([^"]*\)".*/\1/p' \
     "$(cd "$(dirname "$0")" && pwd)/../a11y-probe/AndroidManifest.xml" | head -n 1)
 # The stream is its own repository and its own package; the probe only depends on
@@ -553,10 +559,12 @@ $(awk "BEGIN { printf \"%.1f\", ${ms:-0} / 1000 }")s${at:+ (the last pass at ${a
 }
 
 # The probe walks the target window and writes the summary itself; the suite only
-# reads values such as rows= and prompt.actions=.
+# reads values such as rows= and prompt.actions=. `content call` is synchronous,
+# so the file is complete when the same round trip reads it; the broadcast the
+# probe still accepts is not needed here.
 inspect() {
-    device shell "am broadcast -p $PROBE -a $PROBE.COMMAND --es pkg $APP \
-        --es inspect '$1' >/dev/null 2>&1; cat $PROBE_FILES/$1.txt" 2>/dev/null
+    device shell "content call --uri $PROBE_CONTROL --method inspect \
+        --extra pkg:s:$APP --arg '$1' >/dev/null 2>&1; cat $PROBE_FILES/$1.txt" 2>/dev/null
 }
 
 # Waits for the probe to see at least `minimum` row nodes. The view publishes its
@@ -874,10 +882,10 @@ await_screen() {
 }
 
 dump() {
-    # am broadcast waits for the receiver, so the file is complete when cat runs;
-    # one adb round trip instead of broadcast-then-read.
-    device shell "am broadcast -p $PROBE -a $PROBE.COMMAND --es pkg $APP \
-        --es dump '$1' >/dev/null 2>&1; cat $PROBE_FILES/$1.txt" 2>/dev/null
+    # The provider answers in the call and still writes the named file, so one
+    # adb round trip is both the command and the read.
+    device shell "content call --uri $PROBE_CONTROL --method dump \
+        --extra pkg:s:$APP --arg '$1' >/dev/null 2>&1; cat $PROBE_FILES/$1.txt" 2>/dev/null
 }
 
 # Kills a process and everything under it. A plain kill is not enough for a

@@ -126,6 +126,7 @@ echo "== a11y-probe: aapt2 link (legacy package) =="
 legacy_manifest=$work/AndroidManifest-legacy.xml
 sed -e 's/package="io\.github\.mbanucu\.a11yprobe"/package="io.github.mbanucu.samples.a11yprobe"/' \
     -e 's/android:name="\./android:name="io.github.mbanucu.samples.a11yprobe./g' \
+    -e 's/io\.github\.mbanucu\.a11yprobe\.control/io.github.mbanucu.samples.a11yprobe.control/g' \
     "$manifest" > "$legacy_manifest"
 aapt2 link -o "$work/base-legacy.apk" \
     -I "$android_jar" \

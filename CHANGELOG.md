@@ -19,6 +19,15 @@ and this project adheres to
   `enabled_accessibility_services` byte for byte. The old
   `io.github.mbanucu.samples.a11yprobe` package is kept as a one-release legacy
   APK, and the old action is still accepted by the new one.
+- The probe has a synchronous, scriptable surface at
+  `content://io.github.mbanucu.a11yprobe.control`: `content call` methods `dump`,
+  `find`, `set_text`, `click`, `wait`, `inspect`, `status`, `result` and `batch`
+  answer `code=0|400` with a `data=` payload in the call. `wait` returns the
+  matched event or a timeout (up to 9 s), request ids keep concurrent waits
+  apart, a batch runs several commands in one call with one result line each, and
+  `json:z:true` returns one JSON object per node. The broadcast action and the old
+  file names still work for one release. `bash a11y-probe/test.sh` runs the
+  protocol tests on the JVM.
 - `screenstream` is published to Maven Central as `io.github.mbanucu:screenstream`,
   signed, through the repository's own `publish.sh` (build, sign, checksum, bundle,
   upload, and `--status`/`--publish` for the deployment). 0.1.0 came from

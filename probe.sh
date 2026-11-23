@@ -26,15 +26,20 @@
 # It uses out/a11y-probe-<version>-legacy.apk and the old component name.
 #
 # Environment: ADB (default adb), PROBE_PACKAGE, PROBE_APK, PROBE_STATE,
-# PROBE_LEGACY=1, ANDROID_SERIAL is passed through by adb.
+# PROBE_VERSION, PROBE_LEGACY=1, ANDROID_SERIAL is passed through by adb.
 set -euo pipefail
 
 ADB=${ADB:-adb}
 root=$(cd "$(dirname "$0")" && pwd)
 manifest=$root/a11y-probe/AndroidManifest.xml
 out=$root/out
-expected=$(sed -n 's/.*android:versionName="\([^"]*\)".*/\1/p' "$manifest" | head -n 1)
-[ -n "$expected" ] || { echo "no android:versionName in $manifest" >&2; exit 1; }
+# A release download has probe.sh and the APK, not the checkout around them.
+# The manifest is the best source when it exists; otherwise PROBE_VERSION, the
+# APK's own name, or the installed package supplies the version.
+expected=${PROBE_VERSION:-}
+if [ -z "$expected" ] && [ -f "$manifest" ]; then
+    expected=$(sed -n 's/.*android:versionName="\([^"]*\)".*/\1/p' "$manifest" | head -n 1 || true)
+fi
 
 legacy=${PROBE_LEGACY:-0}
 if [ "${1:-}" = --legacy ]; then
@@ -60,6 +65,28 @@ state_file=$state_dir/$package.state
 
 say() { printf '%s\n' "$*"; }
 fail() { printf 'probe: %s\n' "$*" >&2; exit 1; }
+
+apk_version() { # path
+    local base=${1##*/}
+    base=${base%.apk}
+    base=${base#a11y-probe-}
+    base=${base%-legacy}
+    case $base in
+        ''|*[!0-9A-Za-z._+-]*) return 1 ;;
+    esac
+    printf '%s' "$base"
+}
+
+# The download directory is the usual standalone case. Take the version from
+# the APK there so `install`, `enable` and `status` agree without a checkout.
+if [ -z "$expected" ]; then
+    for candidate in "${PROBE_APK:-}" "$PWD"/a11y-probe-*.apk "$out"/a11y-probe-*.apk; do
+        [ -n "$candidate" ] && [ -f "$candidate" ] || continue
+        if expected=$(apk_version "$candidate"); then
+            break
+        fi
+    done
+fi
 
 device() { $ADB "$@"; }
 
@@ -88,6 +115,19 @@ restore_setting() { # key value
 installed_version() {
     device shell dumpsys package "$package" 2>/dev/null \
         | tr -d '\r' | sed -n 's/.*versionName=\([^ ]*\).*/\1/p' | head -n 1 || true
+}
+
+resolve_expected() {
+    if [ -n "$expected" ]; then return 0; fi
+    local installed
+    installed=$(installed_version)
+    if [ -n "$installed" ]; then
+        expected=$installed
+        printf 'probe: no manifest, PROBE_VERSION or APK; using installed %s\n' \
+            "$expected" >&2
+        return 0
+    fi
+    fail "cannot determine the expected version; set PROBE_VERSION or run from a checkout"
 }
 
 installed_code() {
@@ -220,6 +260,11 @@ enable() {
     local installed
     installed=$(installed_version)
     [ -n "$installed" ] || fail "$package is not installed; run 'bash probe.sh install' first"
+    if [ -z "$expected" ]; then
+        expected=$installed
+        printf 'probe: no manifest, PROBE_VERSION or APK; using installed %s\n' \
+            "$expected" >&2
+    fi
     if [ "$installed" != "$expected" ]; then
         printf 'probe: warning: installed %s, this wrapper is for %s\n' \
             "$installed" "$expected" >&2
@@ -284,6 +329,11 @@ status() {
     code=$(installed_code)
     [ -n "$installed" ] || installed=-
     [ -n "$code" ] || code=-
+    if [ -z "$expected" ] && [ "$installed" != - ]; then
+        expected=$installed
+        printf 'probe: no manifest, PROBE_VERSION or APK; using installed %s\n' \
+            "$expected" >&2
+    fi
     services=$(read_setting enabled_accessibility_services)
     if service_in_list "$services" "$service"; then
         enabled=yes
@@ -315,6 +365,7 @@ version() {
     local installed reported match=no
     installed=$(installed_version)
     [ -n "$installed" ] || fail "$package is not installed"
+    resolve_expected
     reported=$(probe_version) || fail "$package did not answer the version command"
     [ "$(probe_version_name "$reported")" = "$expected" ] && match=yes
     say "package=$package"
@@ -327,13 +378,10 @@ version() {
 
 install_probe() {
     require_device
-    local apk=${1:-} candidate name
-    if [ "$legacy" = 1 ]; then
-        name=a11y-probe-$expected-legacy.apk
-    else
-        name=a11y-probe-$expected.apk
-    fi
-    if [ -z "$apk" ]; then
+    local apk=${1:-} candidate name suffix=""
+    if [ "$legacy" = 1 ]; then suffix=-legacy; fi
+    name=a11y-probe-${expected:-<version>}$suffix.apk
+    if [ -z "$apk" ] && [ -n "$expected" ]; then
         for candidate in "${PROBE_APK:-}" "$PWD/$name" "$out/$name"; do
             if [ -n "$candidate" ] && [ -f "$candidate" ]; then
                 apk=$candidate
@@ -341,9 +389,25 @@ install_probe() {
             fi
         done
     fi
+    if [ -z "$apk" ] && [ -z "$expected" ]; then
+        # No checkout and no known version: the APK in this directory names it.
+        for candidate in "${PROBE_APK:-}" "$PWD"/a11y-probe-*.apk \
+                "$out"/a11y-probe-*.apk; do
+            [ -n "$candidate" ] && [ -f "$candidate" ] || continue
+            case $candidate in
+                *-legacy.apk) [ "$legacy" = 1 ] || continue ;;
+                *) [ "$legacy" = 0 ] || continue ;;
+            esac
+            apk=$candidate
+            break
+        done
+    fi
     [ -n "$apk" ] \
         || fail "no $name in this directory or $out; run 'bash a11y-probe/build.sh' first"
     [ -f "$apk" ] || fail "no $apk"
+    if [ -z "$expected" ]; then
+        expected=$(apk_version "$apk") || fail "cannot read a version from $apk"
+    fi
     say "installing $apk"
     device install -r "$apk" >/dev/null || fail "adb install failed"
     local installed
@@ -360,8 +424,8 @@ usage() {
     cat <<EOF
 usage: bash probe.sh [--legacy] <command>
 
-  install [apk]   install the given APK, or a11y-probe-$expected.apk from
-                  this directory or out/
+  install [apk]   install the given APK, or a11y-probe-${expected:-<version>}.apk
+                  from this directory or out/
   enable          save the accessibility setting, then enable the probe
   disable         restore the saved setting, or remove the probe if unsaved
   status          version, whether the service is enabled, pending saved state

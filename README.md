@@ -87,6 +87,10 @@ bash probe.sh enable
 bash probe.sh status           # package, version, version-match, enabled
 ```
 
+`probe.sh` reads the version from the APK's filename when it is run outside a
+checkout, so the three downloaded files are enough. Set `PROBE_VERSION=1.0.0`
+if the APK was renamed.
+
 The same files with `curl` instead of `gh`:
 
 ```bash

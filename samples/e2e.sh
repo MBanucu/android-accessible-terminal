@@ -798,7 +798,7 @@ has_line() {
 # Installs only when the on-device APK differs, so an unchanged probe keeps its
 # accessibility binding instead of paying the rebind time on every run.
 install_if_changed() { # apk package label
-    local apk=$1 package=$2 label=$3 remote hash local_hash
+    local apk=$1 package=$2 label=$3 remote hash="" local_hash
     remote=$(device shell pm path "$package" 2>/dev/null | tr -d '\r' | sed -n 's/^package://p')
     if [ -n "$remote" ]; then
         hash=$(device shell md5sum "$remote" 2>/dev/null | awk '{print $1}' | tr -d '\r')
@@ -1212,7 +1212,9 @@ test_tui_caret_is_visible() {
     settled_grid 16 >/dev/null || true
     local tree row_line row_text bounds left top right bottom cols caret_col
     tree=$(dump e2e-caret)
-    row_line=$(printf '%s\n' "$tree" | grep -aF '|  > ' | head -1)
+    # The dump starts with the event log, and an announcement can carry the
+    # same text without bounds. Match a tree row, not any line that mentions it.
+    row_line=$(printf '%s\n' "$tree" | grep -aF 'bounds=' | grep -aF '|  > ' | head -1)
     bounds=$(printf '%s\n' "$row_line" | sed -n \
         's/.*bounds=\([0-9]*\),\([0-9]*\),\([0-9]*\),\([0-9]*\).*/\1 \2 \3 \4/p')
     if [ -z "$row_line" ] || [ -z "$bounds" ]; then

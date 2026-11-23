@@ -109,8 +109,22 @@ public class ProbeProvider extends ContentProvider {
                 return setText(args);
             case "click":
                 return click(args);
+            case "long_click":
+                return longClick(args);
+            case "clear":
+                return clear(args);
+            case "scroll":
+                return scroll(args);
+            case "key":
+                return key(args);
+            case "swipe":
+                return swipe(args);
+            case "expect":
+                return expect(args);
             case "wait":
                 return wait(args);
+            case "wait_idle":
+                return waitIdle(args);
             case "inspect":
                 return inspect(args);
             case "status":
@@ -123,7 +137,8 @@ public class ProbeProvider extends ContentProvider {
                 return batch(context, args);
             default:
                 return ProbeReply.error("unknown method '" + method
-                        + "'; methods: dump, find, set_text, click, wait, inspect, status,"
+                        + "'; methods: dump, find, set_text, click, long_click, clear,"
+                        + " scroll, key, swipe, expect, wait, wait_idle, inspect, status,"
                         + " result, batch");
         }
     }
@@ -136,13 +151,16 @@ public class ProbeProvider extends ContentProvider {
     /** The methods that read or act on the target window, not on the whole phone. */
     private static boolean actsOnNodes(String method) {
         return "find".equals(method) || "set_text".equals(method)
-                || "click".equals(method) || "inspect".equals(method);
+                || "click".equals(method) || "long_click".equals(method)
+                || "clear".equals(method) || "scroll".equals(method)
+                || "expect".equals(method) || "inspect".equals(method);
     }
 
     private static ProbeReply find(ProbeArgs args) {
         String needle = args.firstOrArg("find", "text", "needle");
         if (needle == null) {
-            return ProbeReply.error("find needs a needle: --arg <text> or --extra find:s:<text>");
+            return ProbeReply.error("find needs a selector: --arg 'text=OK'"
+                    + " or --extra find:s:'text=OK'");
         }
         return ProbeService.findReply(needle);
     }
@@ -164,9 +182,82 @@ public class ProbeProvider extends ContentProvider {
     private static ProbeReply click(ProbeArgs args) {
         String needle = args.firstOrArg("find", "text", "node");
         if (needle == null) {
-            return ProbeReply.error("click needs a node: --arg <text> or --extra find:s:<text>");
+            return ProbeReply.error("click needs a selector: --arg 'text=OK'"
+                    + " or --extra find:s:'text=OK'");
         }
         return ProbeService.click(needle);
+    }
+
+    private static ProbeReply longClick(ProbeArgs args) {
+        String needle = args.firstOrArg("find", "node", "text");
+        return ProbeService.longClick(needle);
+    }
+
+    private static ProbeReply clear(ProbeArgs args) {
+        String needle = args.firstOrArg("find", "node");
+        return ProbeService.clear(needle);
+    }
+
+    private static ProbeReply scroll(ProbeArgs args) {
+        String direction = args.firstOrArg("direction", "scroll");
+        if (direction == null) {
+            return ProbeReply.error("scroll needs a direction: --arg down|up|forward|backward");
+        }
+        String find = args.first("find", "node");
+        String until = args.first("until", "to");
+        long timeout = Math.max(0, Math.min(args.longValue(5000, "timeout", "waitMs"),
+                ProbeService.MAX_WAIT_MS));
+        return ProbeService.scroll(direction, find, until, timeout);
+    }
+
+    private static ProbeReply key(ProbeArgs args) {
+        String name = args.firstOrArg("key", "name");
+        if (name == null) {
+            return ProbeReply.error("key needs a name: --arg back|home|enter");
+        }
+        return ProbeService.key(name);
+    }
+
+    private static ProbeReply swipe(ProbeArgs args) {
+        String from = args.first("from");
+        String to = args.first("to");
+        String bounds = args.arg();
+        if (from == null && to == null && bounds != null) {
+            String[] points = bounds.split(",", -1);
+            if (points.length == 4) {
+                from = points[0].trim() + "," + points[1].trim();
+                to = points[2].trim() + "," + points[3].trim();
+            }
+        }
+        if (from == null || to == null) {
+            return ProbeReply.error("swipe needs from and to: --extra from:s:100,500"
+                    + " --extra to:s:100,200, or --arg x1,y1,x2,y2");
+        }
+        return ProbeService.swipe(from, to, args.longValue(300, "duration", "ms"));
+    }
+
+    private static ProbeReply expect(ProbeArgs args) {
+        String raw = args.firstOrArg("find", "selector", "node");
+        if (raw == null) {
+            return ProbeReply.error("expect needs a selector: --arg 'text=OK'"
+                    + " or --arg 'text_contains=OK'");
+        }
+        ProbeExpect.Request request = ProbeExpect.request(raw,
+                args.first("assertion", "expect"));
+        String value = args.first("value", "expected");
+        return ProbeService.expect(request.assertion, request.selector, value);
+    }
+
+    private static ProbeReply waitIdle(ProbeArgs args) {
+        if (ProbeService.instance == null) {
+            return ProbeReply.error(ProbeService.NO_SERVICE);
+        }
+        long idle = Math.max(0, args.longValue(500, "idleMs", "idle", "quiet"));
+        long timeout = Math.max(0, Math.min(args.longValue(5000, "timeout", "waitMs"),
+                ProbeService.MAX_WAIT_MS));
+        String answer = ProbeService.waitIdle(idle, timeout);
+        ProbeService.writeReplace("idle.txt", answer);
+        return stateReply(answer);
     }
 
     private static ProbeReply inspect(ProbeArgs args) {
@@ -220,7 +311,7 @@ public class ProbeProvider extends ContentProvider {
         if (id != null) {
             results.complete(id, answer);
         }
-        return waitReply(answer);
+        return stateReply(answer);
     }
 
     /** The background half of an asynchronous wait. */
@@ -234,9 +325,12 @@ public class ProbeProvider extends ContentProvider {
         ProbeService.write("wait.txt", answer);
     }
 
-    private static ProbeReply waitReply(String answer) {
+    private static ProbeReply stateReply(String answer) {
         if (answer.startsWith("matched")) {
             return ProbeReply.state(answer, "matched");
+        }
+        if (answer.startsWith("idle")) {
+            return ProbeReply.state(answer, "idle");
         }
         if (answer.startsWith("timeout")) {
             return ProbeReply.state(answer, "timeout");

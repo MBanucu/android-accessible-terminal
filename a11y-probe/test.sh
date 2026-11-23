@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Runs the probe's protocol tests on the JVM: the JSON a dump emits, the batch
-# line grammar, the argument fallbacks and the reply/result bookkeeping. These
-# classes import no android.*, so this needs no device, no Gradle and no test
-# framework - only a javac, the same way terminal/test.sh runs the grid.
+# Runs the probe's protocol tests on the JVM: the selectors and assertion
+# verdicts, the JSON a dump emits, the node encodings, the batch line grammar,
+# the argument fallbacks and the reply/result bookkeeping. These classes import
+# no android.*, so this needs no device, no Gradle and no test framework - only
+# a javac, the same way terminal/test.sh runs the grid.
 #
 #   bash a11y-probe/test.sh
 #
@@ -20,6 +21,8 @@ mkdir -p "$work"
 sources=(
     "$here/src/io/github/mbanucu/a11yprobe/ProbeReply.java"
     "$here/src/io/github/mbanucu/a11yprobe/ProbeNode.java"
+    "$here/src/io/github/mbanucu/a11yprobe/ProbeSelector.java"
+    "$here/src/io/github/mbanucu/a11yprobe/ProbeExpect.java"
     "$here/src/io/github/mbanucu/a11yprobe/ProbeJson.java"
     "$here/src/io/github/mbanucu/a11yprobe/ProbeArgs.java"
     "$here/src/io/github/mbanucu/a11yprobe/ProbeBatch.java"

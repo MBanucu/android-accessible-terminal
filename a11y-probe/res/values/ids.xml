@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The built-in fixture's ids. They are looked up by name with
+         getResources().getIdentifier, so the same source compiles under both
+         the canonical and the legacy app id without an R class. -->
+    <item name="fixture_status" type="id" />
+    <item name="fixture_field" type="id" />
+    <item name="fixture_save" type="id" />
+    <item name="fixture_dialog_button" type="id" />
+    <item name="fixture_list" type="id" />
+    <item name="fixture_row" type="id" />
+</resources>

@@ -1,11 +1,14 @@
 package io.github.mbanucu.a11yprobe;
 
 import android.accessibilityservice.AccessibilityService;
+import android.accessibilityservice.GestureDescription;
 import android.content.Context;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.graphics.Path;
 import android.graphics.Rect;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -21,6 +24,8 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * The screen reader, for a test: an accessibility service that reads the window
@@ -69,6 +74,16 @@ public class ProbeService extends AccessibilityService {
     /** When set, actions go to this package's window instead of the active one. */
     private static volatile String targetPackage;
 
+    /**
+     * True while the built-in fixture activity is in front.
+     *
+     * <p>The probe normally ignores its own package's events, which are noise
+     * from enabling it; the fixture is the one screen it owns that a test is
+     * meant to drive, so its events are recorded and {@code wait_idle} can see
+     * it settle.
+     */
+    static volatile boolean fixtureFront;
+
     private final Object eventLock = new Object();
     private long nextEventSeq;
     private final Deque<Event> events = new ArrayDeque<>();
@@ -76,10 +91,12 @@ public class ProbeService extends AccessibilityService {
     /** One heard event, with the sequence number a wait matches against. */
     private static final class Event {
         final long seq;
+        final long at;
         final String line;
 
-        Event(long seq, String line) {
+        Event(long seq, long at, String line) {
             this.seq = seq;
+            this.at = at;
             this.line = line;
         }
     }
@@ -156,15 +173,17 @@ public class ProbeService extends AccessibilityService {
         String packageName = String.valueOf(event.getPackageName());
         // The probe's own screens are noise; a terminal being read is the point.
         // getPackageName() is the canonical or legacy app id, depending on which
-        // APK this class was installed in.
-        if (packageName.startsWith(getPackageName())) {
+        // APK this class was installed in. The fixture is the exception: a test
+        // drives it, so its events are the ones wait_idle settles on.
+        if (packageName.startsWith(getPackageName()) && !fixtureFront) {
             return;
         }
         String line = packageName + " " + eventType(event.getEventType())
                 + " " + event.getClassName() + " text=" + event.getText()
                 + " desc=" + event.getContentDescription();
+        long at = System.currentTimeMillis();
         synchronized (eventLock) {
-            events.addLast(new Event(++nextEventSeq, line));
+            events.addLast(new Event(++nextEventSeq, at, line));
             while (events.size() > MAX_EVENTS) {
                 events.removeFirst();
             }
@@ -414,6 +433,54 @@ public class ProbeService extends AccessibilityService {
                 }
                 try {
                     service.eventLock.wait(left);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return "interrupted\n";
+                }
+            }
+        }
+    }
+
+    /**
+     * Waits until no accessibility event has arrived for {@code idleMs}, bounded
+     * by {@code timeoutMs}.
+     *
+     * <p>Call this off the main thread: events are delivered on the main thread,
+     * so a wait there would never see the quiet it is waiting for. A timeout is
+     * not an error; the answer names the last event so a caller can tell an
+     * animated screen from a screen that never changed.
+     */
+    static String waitIdle(long idleMs, long timeoutMs) {
+        ProbeService service = instance;
+        if (service == null) {
+            return "probe service is not running\n";
+        }
+        long idle = Math.max(0, idleMs);
+        long timeout = Math.max(0, Math.min(timeoutMs, MAX_WAIT_MS));
+        long startedAt = System.currentTimeMillis();
+        long deadline = startedAt + timeout;
+        synchronized (service.eventLock) {
+            while (true) {
+                long now = System.currentTimeMillis();
+                Event last = service.events.isEmpty() ? null : service.events.peekLast();
+                // The quiet time is measured from the event itself, even one
+                // that arrived just before this call: a screen that has already
+                // been still for longer than idleMs is idle now.
+                long quietSince = last == null ? startedAt : last.at;
+                long quiet = Math.max(0, now - quietSince);
+                if (quiet >= idle) {
+                    return "idle quiet=" + quiet + "ms events=" + service.events.size()
+                            + (last == null ? " last=none\n"
+                                    : " last seq=" + last.seq + " " + last.line + "\n");
+                }
+                long left = deadline - now;
+                if (left <= 0) {
+                    return "timeout after " + timeout + "ms quiet=" + quiet + "ms"
+                            + (last == null ? " last=none\n"
+                                    : " last seq=" + last.seq + " " + last.line + "\n");
+                }
+                try {
+                    service.eventLock.wait(Math.min(left, idle - quiet));
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                     return "interrupted\n";
@@ -741,26 +808,38 @@ public class ProbeService extends AccessibilityService {
         return null;
     }
 
-    /** Finds a node whose text, description or id contains {@code needle}. */
-    static AccessibilityNodeInfo find(CharSequence needle) {
-        ProbeService service = instance;
-        if (service == null) {
-            return null;
+    /** Live nodes of the target window, and their off-device snapshots, in dump order. */
+    private static final class Nodes {
+        final List<AccessibilityNodeInfo> live = new ArrayList<>();
+        final List<ProbeNode> snapshots = new ArrayList<>();
+
+        void recycle() {
+            for (AccessibilityNodeInfo node : live) {
+                node.recycle();
+            }
+            live.clear();
+            snapshots.clear();
         }
+    }
+
+    /**
+     * Takes one snapshot of the target window's nodes plus the live nodes at the
+     * same positions. The selector logic picks a position in the off-device list,
+     * so the parser and the ranking are tested without Android while the action
+     * still lands on the live node.
+     */
+    private static Nodes collectTargets() {
         AccessibilityNodeInfo root = rootFor();
         if (root == null) {
             return null;
         }
-        String wanted = String.valueOf(needle);
+        Nodes out = new Nodes();
         Deque<AccessibilityNodeInfo> pending = new ArrayDeque<>();
         pending.add(root);
-        while (!pending.isEmpty()) {
+        while (!pending.isEmpty() && out.live.size() < MAX_NODES) {
             AccessibilityNodeInfo node = pending.removeFirst();
-            if (contains(node.getText(), wanted) || contains(node.getContentDescription(), wanted)
-                    || contains(node.getHintText(), wanted)
-                    || contains(node.getViewIdResourceName(), wanted)) {
-                return node;
-            }
+            out.live.add(node);
+            out.snapshots.add(nodeOf(node, 0));
             for (int i = 0; i < node.getChildCount(); i++) {
                 AccessibilityNodeInfo child = node.getChild(i);
                 if (child != null) {
@@ -768,79 +847,135 @@ public class ProbeService extends AccessibilityService {
                 }
             }
         }
-        root.recycle();
-        return null;
+        // The budget can stop the walk with children still queued; they were
+        // never added to `live`, so they are recycled here or not at all.
+        for (AccessibilityNodeInfo leftover : pending) {
+            leftover.recycle();
+        }
+        return out;
     }
 
-    private static boolean contains(CharSequence haystack, String needle) {
-        return haystack != null && haystack.toString().contains(needle);
+    private static int matchIndex(Nodes nodes, ProbeSelector selector) {
+        List<Integer> matches = selector.matchingIndexes(nodes.snapshots);
+        return matches.isEmpty() ? -1 : matches.get(0);
     }
 
-    /** The first node matching {@code needle}, as the line {@code find} answers with. */
+    private static ProbeReply noWindow() {
+        ProbeService service = instance;
+        String active = "none";
+        int windows = 0;
+        if (service != null) {
+            AccessibilityNodeInfo front = service.getRootInActiveWindow();
+            if (front != null) {
+                active = String.valueOf(front.getPackageName());
+                front.recycle();
+            }
+            List<AccessibilityWindowInfo> list = service.getWindows();
+            windows = list == null ? 0 : list.size();
+        }
+        return ProbeReply.error("no window for "
+                + (targetPackage == null ? "the active app" : targetPackage)
+                + " (windows=" + windows + " active=" + active + ")");
+    }
+
+    private static ProbeReply noMatch(ProbeSelector selector, Nodes nodes) {
+        return ProbeReply.error("no node matching " + selector.label()
+                + "; closest: " + selector.candidates(nodes.snapshots));
+    }
+
+    /** The fields an action answer names, so it also says which node it touched. */
+    private static String nodeLabel(AccessibilityNodeInfo node) {
+        return node.getClassName()
+                + " id=" + (node.getViewIdResourceName() == null
+                        ? "-" : node.getViewIdResourceName())
+                + " desc=" + quote(node.getContentDescription())
+                + " text=" + quote(node.getText());
+    }
+
+    private static boolean hasAction(AccessibilityNodeInfo node, int actionId) {
+        for (AccessibilityNodeInfo.AccessibilityAction action : node.getActionList()) {
+            if (action.getId() == actionId) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static AccessibilityNodeInfo focusedNode() {
+        ProbeService service = instance;
+        if (service == null) {
+            return null;
+        }
+        // Input focus is where Enter belongs; accessibility focus is the
+        // screen-reader cursor and is the fallback for a long click.
+        AccessibilityNodeInfo node = service.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+        if (node == null) {
+            node = service.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY);
+        }
+        return node;
+    }
+
+    /** The first node matching a selector, as the line {@code find} answers with. */
     static ProbeReply findReply(String needle) {
         if (instance == null) {
             return ProbeReply.error(ProbeService.NO_SERVICE);
         }
-        AccessibilityNodeInfo node = find(needle);
-        if (node == null) {
-            return ProbeReply.error("no node matching '" + needle + "'");
+        ProbeSelector selector = ProbeSelector.parse(needle);
+        Nodes nodes = collectTargets();
+        if (nodes == null) {
+            return noWindow();
         }
-        String description = nodeOf(node, 0).describe();
-        node.recycle();
-        return ProbeReply.ok(description);
+        int at = matchIndex(nodes, selector);
+        if (at < 0) {
+            ProbeReply failure = noMatch(selector, nodes);
+            nodes.recycle();
+            return failure;
+        }
+        ProbeNode snapshot = nodes.snapshots.get(at);
+        String answer = snapshot.describe() + " matched=" + selector.label()
+                + " field=" + selector.matchedField(snapshot);
+        nodes.recycle();
+        return ProbeReply.ok(answer);
     }
 
     /** The action a screen reader's "type" and a voice keyboard's dictation use. */
-    static ProbeReply setText(CharSequence find, String text) {
+    static ProbeReply setText(String find, String text) {
         if (instance == null) {
             return ProbeReply.error(ProbeService.NO_SERVICE);
         }
-        if (find == null || find.length() == 0) {
+        if (find == null || find.isEmpty()) {
             return setTextOnFirstEditable(text);
         }
-        AccessibilityNodeInfo node = find(find);
-        if (node == null) {
-            return setTextOnFirstEditable(text);
+        ProbeSelector selector = ProbeSelector.parse(find);
+        Nodes nodes = collectTargets();
+        if (nodes == null) {
+            return noWindow();
         }
+        int at = matchIndex(nodes, selector);
+        if (at < 0) {
+            ProbeReply failure = noMatch(selector, nodes);
+            nodes.recycle();
+            return failure;
+        }
+        AccessibilityNodeInfo node = nodes.live.get(at);
         Bundle arguments = new Bundle();
         arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
         boolean performed = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments);
-        String answer = "SET_TEXT on " + node.getClassName() + " package=" + node.getPackageName()
+        String answer = "SET_TEXT on " + nodeLabel(node)
                 + " editable=" + node.isEditable() + " -> " + performed;
         write("actions.txt", answer + "\n");
-        node.recycle();
+        nodes.recycle();
         return performed ? ProbeReply.ok(answer)
                 : ProbeReply.error(answer + " (the node did not accept ACTION_SET_TEXT)");
     }
 
     private static ProbeReply setTextOnFirstEditable(String text) {
-        if (instance == null) {
-            return ProbeReply.error(ProbeService.NO_SERVICE);
+        Nodes nodes = collectTargets();
+        if (nodes == null) {
+            return noWindow();
         }
-        AccessibilityNodeInfo root = rootFor();
-        if (root == null) {
-            // Say what the service could see: "no window" alone does not tell a
-            // reader whether the app was not on screen or the list was empty.
-            ProbeService service = instance;
-            String active = "none";
-            int windows = 0;
-            if (service != null) {
-                AccessibilityNodeInfo front = service.getRootInActiveWindow();
-                if (front != null) {
-                    active = String.valueOf(front.getPackageName());
-                    front.recycle();
-                }
-                List<AccessibilityWindowInfo> list = service.getWindows();
-                windows = list == null ? 0 : list.size();
-            }
-            return ProbeReply.error("no window for "
-                    + (targetPackage == null ? "the active app" : targetPackage)
-                    + " (windows=" + windows + " active=" + active + ")");
-        }
-        Deque<AccessibilityNodeInfo> pending = new ArrayDeque<>();
-        pending.add(root);
-        while (!pending.isEmpty()) {
-            AccessibilityNodeInfo node = pending.removeFirst();
+        for (int i = 0; i < nodes.live.size(); i++) {
+            AccessibilityNodeInfo node = nodes.live.get(i);
             if (node.isEditable() && node.getActionList().contains(
                     AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_TEXT)) {
                 Bundle arguments = new Bundle();
@@ -848,65 +983,422 @@ public class ProbeService extends AccessibilityService {
                         AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
                 boolean performed = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,
                         arguments);
-                String answer = "SET_TEXT on first editable " + node.getClassName()
-                        + " package=" + node.getPackageName() + " -> " + performed;
+                String answer = "SET_TEXT on first editable " + nodeLabel(node)
+                        + " -> " + performed;
                 write("actions.txt", answer + "\n");
-                root.recycle();
+                nodes.recycle();
                 return performed ? ProbeReply.ok(answer)
                         : ProbeReply.error(answer + " (the node did not accept ACTION_SET_TEXT)");
             }
-            for (int i = 0; i < node.getChildCount(); i++) {
-                AccessibilityNodeInfo child = node.getChild(i);
-                if (child != null) {
-                    pending.addLast(child);
-                }
-            }
         }
-        root.recycle();
-        return ProbeReply.error("no editable node in the active window");
+        nodes.recycle();
+        return ProbeReply.error("no editable node in the target window");
     }
 
-    /** Moves accessibility focus, which is what TalkBack's swipe does. */
-    static ProbeReply focus(CharSequence find) {
+    /**
+     * Clears a field: SET_TEXT with an empty string, then reads the text back.
+     * The old advice was "set_text with an empty string, unverified"; this one
+     * answers 400 when the field still holds something.
+     */
+    static ProbeReply clear(String find) {
         if (instance == null) {
             return ProbeReply.error(ProbeService.NO_SERVICE);
         }
-        AccessibilityNodeInfo node = find(find);
-        if (node == null) {
-            return ProbeReply.error("no node matching '" + find + "'");
+        ProbeSelector selector = find == null || find.isEmpty() ? null
+                : ProbeSelector.parse(find);
+        Nodes nodes = collectTargets();
+        if (nodes == null) {
+            return noWindow();
         }
+        int at = selector == null ? firstEditable(nodes) : matchIndex(nodes, selector);
+        if (at < 0) {
+            ProbeReply failure = selector == null
+                    ? ProbeReply.error("no editable node in the target window")
+                    : noMatch(selector, nodes);
+            nodes.recycle();
+            return failure;
+        }
+        AccessibilityNodeInfo node = nodes.live.get(at);
+        Bundle arguments = new Bundle();
+        arguments.putCharSequence(
+                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "");
+        boolean performed = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments);
+        node.refresh();
+        CharSequence remaining = node.getText();
+        boolean empty = remaining == null || remaining.length() == 0;
+        String answer = "CLEAR on " + nodeLabel(node) + " -> " + (performed && empty);
+        if (!empty) {
+            answer += " (still holds " + quote(remaining) + ")";
+        }
+        write("actions.txt", answer + "\n");
+        nodes.recycle();
+        return performed && empty ? ProbeReply.ok(answer)
+                : ProbeReply.error(answer + " (the field did not clear)");
+    }
+
+    private static int firstEditable(Nodes nodes) {
+        for (int i = 0; i < nodes.live.size(); i++) {
+            AccessibilityNodeInfo node = nodes.live.get(i);
+            if (node.isEditable() && hasAction(node, AccessibilityNodeInfo.ACTION_SET_TEXT)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** Moves accessibility focus, which is what TalkBack's swipe does. */
+    static ProbeReply focus(String find) {
+        if (instance == null) {
+            return ProbeReply.error(ProbeService.NO_SERVICE);
+        }
+        if (find == null || find.isEmpty()) {
+            return ProbeReply.error("focus needs a selector: --arg 'text=OK'");
+        }
+        ProbeSelector selector = ProbeSelector.parse(find);
+        Nodes nodes = collectTargets();
+        if (nodes == null) {
+            return noWindow();
+        }
+        int at = matchIndex(nodes, selector);
+        if (at < 0) {
+            ProbeReply failure = noMatch(selector, nodes);
+            nodes.recycle();
+            return failure;
+        }
+        AccessibilityNodeInfo node = nodes.live.get(at);
         boolean focused = node.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS);
-        String answer = "A11Y_FOCUS on " + node.getClassName()
-                + " package=" + node.getPackageName()
+        String answer = "A11Y_FOCUS on " + nodeLabel(node)
                 + " visible=" + node.isVisibleToUser()
                 + " enabled=" + node.isEnabled()
                 + " actions=" + actionNames(node)
                 + " clickable=" + node.isClickable()
                 + " a11yFocused=" + node.isAccessibilityFocused()
-                + " id=" + node.getViewIdResourceName()
                 + " bounds=" + bounds(node)
                 + " -> " + focused;
         write("actions.txt", answer + "\n");
-        node.recycle();
+        nodes.recycle();
         return focused ? ProbeReply.ok(answer)
                 : ProbeReply.error(
                         answer + " (the node did not accept ACTION_ACCESSIBILITY_FOCUS)");
     }
 
-    static ProbeReply click(CharSequence find) {
+    static ProbeReply click(String find) {
+        return tap(find, AccessibilityNodeInfo.ACTION_CLICK, "CLICK");
+    }
+
+    static ProbeReply longClick(String find) {
+        return tap(find, AccessibilityNodeInfo.ACTION_LONG_CLICK, "LONG_CLICK");
+    }
+
+    private static ProbeReply tap(String find, int action, String name) {
         if (instance == null) {
             return ProbeReply.error(ProbeService.NO_SERVICE);
         }
-        AccessibilityNodeInfo node = find(find);
-        if (node == null) {
-            return ProbeReply.error("no node matching '" + find + "'");
+        if (find == null || find.isEmpty()) {
+            if (AccessibilityNodeInfo.ACTION_LONG_CLICK == action) {
+                // A long click with no selector is the focused node, which is
+                // what a screen reader would act on.
+                AccessibilityNodeInfo focused = focusedNode();
+                if (focused == null) {
+                    return ProbeReply.error(name + " needs a selector or a focused node");
+                }
+                boolean done = focused.performAction(action);
+                String answer = name + " on " + nodeLabel(focused) + " -> " + done;
+                write("actions.txt", answer + "\n");
+                focused.recycle();
+                return done ? ProbeReply.ok(answer)
+                        : ProbeReply.error(answer + " (the node did not accept " + name + ")");
+            }
+            return ProbeReply.error(name.toLowerCase() + " needs a selector: --arg 'text=OK'");
         }
-        boolean clicked = node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-        String answer = "CLICK on " + node.getClassName() + " -> " + clicked;
+        ProbeSelector selector = ProbeSelector.parse(find);
+        Nodes nodes = collectTargets();
+        if (nodes == null) {
+            return noWindow();
+        }
+        int at = matchIndex(nodes, selector);
+        if (at < 0) {
+            ProbeReply failure = noMatch(selector, nodes);
+            nodes.recycle();
+            return failure;
+        }
+        AccessibilityNodeInfo node = nodes.live.get(at);
+        boolean done = node.performAction(action);
+        String answer = name + " on " + nodeLabel(node) + " -> " + done;
+        write("actions.txt", answer + "\n");
+        nodes.recycle();
+        return done ? ProbeReply.ok(answer)
+                : ProbeReply.error(answer + " (the node did not accept " + name + ")");
+    }
+
+    /**
+     * Scrolls the target window for real, optionally until a selector matches.
+     *
+     * <p>{@code down}/{@code forward} reveal later content and
+     * {@code up}/{@code backward} earlier content, using the node's own
+     * ACTION_SCROLL_* rather than a reported capability. With {@code until} the
+     * tree is dumped again after every scroll; the answer names the node the
+     * wait found, so a suite can click it without coordinates or {@code input}.
+     */
+    static ProbeReply scroll(String direction, String find, String until, long timeoutMs) {
+        if (instance == null) {
+            return ProbeReply.error(ProbeService.NO_SERVICE);
+        }
+        String dir = direction == null ? "" : direction.trim().toLowerCase(java.util.Locale.ROOT);
+        int action = scrollAction(dir);
+        if (action == 0) {
+            return ProbeReply.error("unknown scroll direction '" + direction
+                    + "'; directions: down, forward, up, backward");
+        }
+        ProbeSelector target = find == null || find.isEmpty() ? null
+                : ProbeSelector.parse(find);
+        ProbeSelector untilSelector = until == null || until.isEmpty() ? null
+                : ProbeSelector.parse(until);
+        long timeout = Math.max(0, Math.min(timeoutMs, MAX_WAIT_MS));
+        long deadline = SystemClock.uptimeMillis() + timeout;
+        int attempts = 0;
+        String last = "";
+        while (true) {
+            Nodes nodes = collectTargets();
+            if (nodes == null) {
+                return noWindow();
+            }
+            if (untilSelector != null) {
+                int found = matchIndex(nodes, untilSelector);
+                if (found >= 0) {
+                    ProbeNode node = nodes.snapshots.get(found);
+                    String answer = "SCROLL " + dir + " found " + untilSelector.label()
+                            + (attempts == 0 ? " without scrolling"
+                                    : " after " + attempts + " scroll(s)")
+                            + ": " + node.brief();
+                    nodes.recycle();
+                    write("actions.txt", answer + "\n");
+                    return ProbeReply.ok(answer);
+                }
+            }
+            int at = target == null ? firstScrollable(nodes, action)
+                    : matchIndex(nodes, target);
+            if (at < 0) {
+                String why = target == null
+                        ? "no node accepts ACTION_SCROLL_" + (action
+                                == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                                        ? "FORWARD" : "BACKWARD")
+                        : "no node matching " + target.label();
+                String closest = target == null ? ""
+                        : "; closest: " + target.candidates(nodes.snapshots);
+                nodes.recycle();
+                return ProbeReply.error("SCROLL " + dir + " failed: " + why + closest);
+            }
+            AccessibilityNodeInfo node = nodes.live.get(at);
+            boolean performed = node.performAction(action);
+            last = "SCROLL " + dir + " on " + nodeLabel(node) + " -> " + performed;
+            nodes.recycle();
+            write("actions.txt", last + "\n");
+            if (!performed) {
+                if (untilSelector == null) {
+                    return ProbeReply.error(last
+                            + " (the node did not accept the scroll action)");
+                }
+                break;
+            }
+            attempts++;
+            if (untilSelector == null) {
+                return ProbeReply.ok(last);
+            }
+            if (SystemClock.uptimeMillis() >= deadline) {
+                break;
+            }
+            SystemClock.sleep(150);
+        }
+        Nodes finalNodes = collectTargets();
+        String closest = finalNodes == null ? "(no window)"
+                : untilSelector.candidates(finalNodes.snapshots);
+        if (finalNodes != null) {
+            finalNodes.recycle();
+        }
+        String answer = "SCROLL " + dir + " failed: " + untilSelector.label()
+                + " not found after " + attempts + " scroll(s); closest: " + closest;
+        write("actions.txt", answer + "\n");
+        return ProbeReply.error(answer + (last.isEmpty() ? "" : " (" + last + ")"));
+    }
+
+    private static int scrollAction(String direction) {
+        switch (direction) {
+            case "down":
+            case "forward":
+            case "next":
+                return AccessibilityNodeInfo.ACTION_SCROLL_FORWARD;
+            case "up":
+            case "backward":
+            case "previous":
+                return AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
+            default:
+                return 0;
+        }
+    }
+
+    private static int firstScrollable(Nodes nodes, int action) {
+        for (int i = 0; i < nodes.live.size(); i++) {
+            if (hasAction(nodes.live.get(i), action)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * One key from a small allowlist, rather than arbitrary keycodes: back and
+     * home are the service's global actions, enter is ACTION_IME_ENTER on the
+     * focused node (the accessibility action an IME performs, Android 11+).
+     */
+    static ProbeReply key(String name) {
+        if (instance == null) {
+            return ProbeReply.error(ProbeService.NO_SERVICE);
+        }
+        String key = name == null ? "" : name.trim().toLowerCase(java.util.Locale.ROOT);
+        switch (key) {
+            case "back":
+            case "home":
+                boolean performed = instance.performGlobalAction("back".equals(key)
+                        ? AccessibilityService.GLOBAL_ACTION_BACK
+                        : AccessibilityService.GLOBAL_ACTION_HOME);
+                String answer = "KEY " + key + " -> " + performed;
+                write("actions.txt", answer + "\n");
+                return performed ? ProbeReply.ok(answer)
+                        : ProbeReply.error(answer + " (the service refused the global action)");
+            case "enter":
+                return pressEnter();
+            default:
+                return ProbeReply.error("unknown key '" + name
+                        + "'; keys: back, home, enter");
+        }
+    }
+
+    private static ProbeReply pressEnter() {
+        AccessibilityNodeInfo node = focusedNode();
+        if (node == null) {
+            return ProbeReply.error("KEY enter needs a focused node; click or set_text"
+                    + " a field first");
+        }
+        String label = nodeLabel(node);
+        int action = AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.getId();
+        if (!hasAction(node, action)) {
+            node.recycle();
+            String answer = "KEY enter on " + label + " -> false"
+                    + " (the node does not expose ACTION_IME_ENTER)";
+            write("actions.txt", answer + "\n");
+            return ProbeReply.error(answer);
+        }
+        boolean performed = node.performAction(action);
+        String answer = "KEY enter on " + label + " -> " + performed;
         write("actions.txt", answer + "\n");
         node.recycle();
-        return clicked ? ProbeReply.ok(answer)
-                : ProbeReply.error(answer + " (the node did not accept ACTION_CLICK)");
+        return performed ? ProbeReply.ok(answer)
+                : ProbeReply.error(answer + " (the node refused ACTION_IME_ENTER)");
+    }
+
+    /**
+     * A gesture swipe, in screen coordinates: an accessibility service's own
+     * dispatchGesture, not an {@code input swipe}. It waits for the gesture
+     * callback so the answer says completed or cancelled rather than dispatched.
+     */
+    static ProbeReply swipe(String from, String to, long durationMs) {
+        if (instance == null) {
+            return ProbeReply.error(ProbeService.NO_SERVICE);
+        }
+        int[] start = point(from, "from");
+        int[] end = point(to, "to");
+        long duration = durationMs <= 0 ? 300 : Math.min(durationMs, 10_000);
+        Path path = new Path();
+        path.moveTo(start[0], start[1]);
+        path.lineTo(end[0], end[1]);
+        GestureDescription gesture = new GestureDescription.Builder()
+                .addStroke(new GestureDescription.StrokeDescription(path, 0, duration))
+                .build();
+        final CountDownLatch done = new CountDownLatch(1);
+        final boolean[] completed = new boolean[1];
+        final boolean[] cancelled = new boolean[1];
+        boolean dispatched = instance.dispatchGesture(gesture,
+                new AccessibilityService.GestureResultCallback() {
+                    @Override
+                    public void onCompleted(GestureDescription finished) {
+                        completed[0] = true;
+                        done.countDown();
+                    }
+
+                    @Override
+                    public void onCancelled(GestureDescription finished) {
+                        cancelled[0] = true;
+                        done.countDown();
+                    }
+                }, null);
+        String result = "not dispatched";
+        if (dispatched) {
+            try {
+                if (!done.await(duration + 2000, TimeUnit.MILLISECONDS)) {
+                    result = "timed out";
+                } else if (completed[0]) {
+                    result = "completed";
+                } else if (cancelled[0]) {
+                    result = "cancelled";
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                result = "interrupted";
+            }
+        }
+        String answer = "SWIPE from=" + start[0] + "," + start[1]
+                + " to=" + end[0] + "," + end[1]
+                + " duration=" + duration + " -> " + result;
+        write("actions.txt", answer + "\n");
+        if (!dispatched) {
+            return ProbeReply.error(answer
+                    + " (dispatchGesture refused; is canPerformGestures set?)");
+        }
+        return "completed".equals(result) ? ProbeReply.ok(answer)
+                : ProbeReply.error(answer);
+    }
+
+    private static int[] point(String raw, String which) {
+        if (raw == null || raw.trim().isEmpty()) {
+            throw new IllegalArgumentException(which + " needs x,y");
+        }
+        String[] parts = raw.trim().split(",", -1);
+        if (parts.length != 2) {
+            throw new IllegalArgumentException(which + " must be x,y, got '" + raw + "'");
+        }
+        try {
+            int x = Integer.parseInt(parts[0].trim());
+            int y = Integer.parseInt(parts[1].trim());
+            if (x < 0 || y < 0) {
+                throw new IllegalArgumentException(which + " coordinates cannot be negative");
+            }
+            return new int[] { x, y };
+        } catch (NumberFormatException notANumber) {
+            throw new IllegalArgumentException(which + " must be x,y, got '" + raw + "'");
+        }
+    }
+
+    /**
+     * Runs an assertion over the target window and writes the answer to
+     * {@code expect.txt}, so a broadcast caller can read the same verdict the
+     * provider returned.
+     */
+    static ProbeReply expect(String assertion, String rawSelector, String value) {
+        if (instance == null) {
+            return ProbeReply.error(ProbeService.NO_SERVICE);
+        }
+        ProbeSelector selector = ProbeSelector.parse(rawSelector);
+        Nodes nodes = collectTargets();
+        if (nodes == null) {
+            return noWindow();
+        }
+        ProbeReply reply = ProbeExpect.evaluate(assertion, selector, value, nodes.snapshots);
+        nodes.recycle();
+        writeReplace("expect.txt", "code=" + reply.code + " data=" + reply.data + "\n");
+        write("actions.txt", "expect " + (assertion == null ? ProbeExpect.EXISTS : assertion)
+                + " " + selector.label() + " -> code=" + reply.code + "\n");
+        return reply;
     }
 
     static void write(String name, String body) {

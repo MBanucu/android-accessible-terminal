@@ -57,6 +57,17 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
+        <!-- The synchronous command surface: one call, one answer in the call.
+             `content call` with method `dump` returns the tree instead of
+             leaving the caller to poll a file. It is exported with no
+             permission, the same boundary as the receiver: the accessibility
+             service being enabled is the switch, and this is a test tool for a
+             test device. -->
+        <provider
+            android:name=".ProbeProvider"
+            android:authorities="io.github.mbanucu.a11yprobe.control"
+            android:exported="true" />
+
         <!-- Commands arrive from adb: dump the tree, set text, focus, click, and
              report the probe's version. The second action is the
              io.github.mbanucu.samples.a11yprobe one from before this module was

@@ -18,6 +18,7 @@ import io.github.mbanucu.screenstream.ScreenStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 
@@ -44,6 +45,24 @@ public class ProbeService extends AccessibilityService {
     private static final int MAX_EVENTS = 200;
     /** Nodes written per dump: a WebView's terminal alone can have thousands. */
     private static final int MAX_NODES = 3000;
+    /**
+     * The longest a {@code wait} may block before answering "timeout".
+     *
+     * <p>It is a binder call, and a caller that needs longer uses a request id
+     * and {@code result} instead of keeping the transaction open.
+     */
+    static final long MAX_WAIT_MS = 9000;
+    /** A command that needs the accessibility service but found it off. */
+    static final String NO_SERVICE =
+            "probe service is not running; enable it with 'bash probe.sh enable'";
+    /**
+     * The largest payload a reply may carry, in characters.
+     *
+     * <p>A binder transaction is about 1 MB; a string crosses it as UTF-16, so
+     * 300k characters leaves room for the bundle around it. The file always
+     * holds the whole tree; a reply that would not fit says so.
+     */
+    static final int MAX_REPLY_CHARS = 300_000;
 
     static volatile ProbeService instance;
 
@@ -98,6 +117,23 @@ public class ProbeService extends AccessibilityService {
             }
         }
         return answer;
+    }
+
+    /**
+     * What the provider can report without doing anything: the authority it is
+     * listening on, the installed version, whether the service is bound, the
+     * target package and the event and window counts.
+     */
+    static String status(Context context) {
+        ProbeService service = instance;
+        StringBuilder out = new StringBuilder();
+        out.append("authority=").append(context.getPackageName()).append(".control\n");
+        out.append("version=").append(version(context)).append('\n');
+        out.append("service=").append(service == null ? "disconnected" : "connected").append('\n');
+        out.append("target=").append(targetPackage == null ? "active" : targetPackage).append('\n');
+        out.append("events=").append(eventCount()).append('\n');
+        out.append("windows=").append(service == null ? 0 : service.windowCount()).append('\n');
+        return out.toString();
     }
 
     @Override
@@ -155,11 +191,28 @@ public class ProbeService extends AccessibilityService {
         }
     }
 
-    /** Writes every window's tree, and the events the service heard, to files. */
-    static String dump(String name) {
+    /**
+     * Writes every window's tree, and the events the service heard, to a file,
+     * and returns the same tree for a provider reply.
+     *
+     * <p>Text is the default; {@code json} writes one JSON object per node in
+     * one JSON document, which is what a harness parses instead of the
+     * indented text. The file and the reply are written from the same string,
+     * except that text mode keeps the whole tree in the file and cuts the reply
+     * at {@link #MAX_REPLY_CHARS}.
+     */
+    static ProbeReply dump(String name, boolean json) {
         ProbeService service = instance;
         if (service == null) {
-            return "probe service is not running";
+            return ProbeReply.error(ProbeService.NO_SERVICE);
+        }
+        name = ProbeArgs.safeFileName(name, "tree");
+        if (json) {
+            List<ProbeNode> nodes = service.collectNodes();
+            String body = ProbeJson.dump(service.getPackageName(), service.windowCount(),
+                    nodes, MAX_REPLY_CHARS);
+            writeReplace(name + ".json", body);
+            return ProbeReply.ok(body, "dumped " + name + ".json (" + body.length() + " chars)");
         }
         StringBuilder out = new StringBuilder();
         out.append("package=").append(service.getPackageName()).append('\n');
@@ -189,8 +242,71 @@ public class ProbeService extends AccessibilityService {
             walk(active, 0, out, new int[] { 0, MAX_NODES });
             active.recycle();
         }
-        write(name + ".txt", out.toString());
-        return "dumped " + name + ".txt (" + out.length() + " chars)";
+        String body = out.toString();
+        write(name + ".txt", body);
+        String reply = body.length() <= MAX_REPLY_CHARS ? body
+                : body.substring(0, MAX_REPLY_CHARS)
+                        + "\n[truncated for the reply; the full tree is in " + name + ".txt]\n";
+        return ProbeReply.ok(reply, "dumped " + name + ".txt (" + body.length() + " chars)");
+    }
+
+    /** Every window's nodes and the active root's, in the dump's order. */
+    private List<ProbeNode> collectNodes() {
+        List<ProbeNode> nodes = new ArrayList<>();
+        List<AccessibilityWindowInfo> windows = getWindows();
+        if (windows != null) {
+            for (AccessibilityWindowInfo window : windows) {
+                AccessibilityNodeInfo root = window.getRoot();
+                if (root != null) {
+                    collect(root, 0, nodes, new int[] { 0, MAX_NODES });
+                    root.recycle();
+                }
+            }
+        }
+        AccessibilityNodeInfo active = getRootInActiveWindow();
+        if (active != null) {
+            collect(active, 0, nodes, new int[] { 0, MAX_NODES });
+            active.recycle();
+        }
+        return nodes;
+    }
+
+    private static void collect(AccessibilityNodeInfo node, int depth, List<ProbeNode> out,
+            int[] budget) {
+        if (node == null || depth > 60 || budget[1]-- <= 0) {
+            return;
+        }
+        out.add(nodeOf(node, depth));
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child != null) {
+                collect(child, depth + 1, out, budget);
+                child.recycle();
+            }
+        }
+    }
+
+    private static ProbeNode nodeOf(AccessibilityNodeInfo node, int depth) {
+        Rect bounds = new Rect();
+        node.getBoundsInScreen(bounds);
+        List<String> actions = new ArrayList<>();
+        for (AccessibilityNodeInfo.AccessibilityAction action : node.getActionList()) {
+            actions.add(actionLabel(action.getId()));
+        }
+        return new ProbeNode(depth, String.valueOf(node.getClassName()),
+                text(node.getText()), text(node.getContentDescription()),
+                node.getViewIdResourceName(), bounds.left, bounds.top, bounds.right, bounds.bottom,
+                actions, node.isEditable(), node.isClickable(), node.isFocusable(),
+                node.isFocused());
+    }
+
+    private static String text(CharSequence value) {
+        return value == null ? null : value.toString();
+    }
+
+    private int windowCount() {
+        List<AccessibilityWindowInfo> windows = getWindows();
+        return windows == null ? 0 : windows.size();
     }
 
     private static void walk(AccessibilityNodeInfo node, int depth, StringBuilder out, int[] budget) {
@@ -230,11 +346,7 @@ public class ProbeService extends AccessibilityService {
     }
 
     private static String quote(CharSequence text) {
-        if (text == null) {
-            return "-";
-        }
-        String flat = text.toString().replace("\n", "\\n");
-        return flat.length() > 160 ? flat.substring(0, 160) + "…(" + flat.length() + ")" : flat;
+        return ProbeNode.quote(text);
     }
 
     private static String bounds(AccessibilityNodeInfo node) {
@@ -283,7 +395,7 @@ public class ProbeService extends AccessibilityService {
         if (service == null) {
             return "probe service is not running\n";
         }
-        long timeout = Math.max(0, Math.min(timeoutMs, 9000));
+        long timeout = Math.max(0, Math.min(timeoutMs, MAX_WAIT_MS));
         long deadline = System.currentTimeMillis() + timeout;
         synchronized (service.eventLock) {
             while (true) {
@@ -356,17 +468,29 @@ public class ProbeService extends AccessibilityService {
         }
     }
 
+    /** How many events the service is holding, for {@code status}. */
+    static int eventCount() {
+        ProbeService service = instance;
+        if (service == null) {
+            return 0;
+        }
+        synchronized (service.eventLock) {
+            return service.events.size();
+        }
+    }
+
     /**
      * A compact summary of what a service can read in the target window: row
      * texts and widths, the editable prompt and its actions, the node with
      * accessibility focus, and event counts. The walking and counting happen
      * here, so a test asserts on values rather than parsing a tree.
      */
-    static String inspect(String name) {
+    static ProbeReply inspect(String name) {
         ProbeService service = instance;
         if (service == null) {
-            return "probe service is not running\n";
+            return ProbeReply.error(ProbeService.NO_SERVICE);
         }
+        name = ProbeArgs.safeFileName(name, "inspect");
         StringBuilder out = new StringBuilder();
         out.append("package=").append(service.getPackageName()).append('\n');
         List<AccessibilityWindowInfo> windows = service.getWindows();
@@ -438,7 +562,12 @@ public class ProbeService extends AccessibilityService {
         out.append("events.ANNOUNCEMENT=").append(announcements).append('\n');
         out.append("events.A11Y_FOCUSED=").append(a11yFocused).append('\n');
         writeReplace(name + ".txt", out.toString());
-        return "inspected " + name + ".txt (" + out.length() + " chars)";
+        String body = out.toString();
+        String reply = body.length() <= MAX_REPLY_CHARS ? body
+                : body.substring(0, MAX_REPLY_CHARS)
+                        + "\n[truncated for the reply; the full summary is in " + name + ".txt]\n";
+        return ProbeReply.ok(reply,
+                "inspected " + name + ".txt (" + body.length() + " chars)");
     }
 
     /** A row of the terminal, rather than an ordinary label in the same window. */
@@ -647,8 +776,28 @@ public class ProbeService extends AccessibilityService {
         return haystack != null && haystack.toString().contains(needle);
     }
 
+    /** The first node matching {@code needle}, as the line {@code find} answers with. */
+    static ProbeReply findReply(String needle) {
+        if (instance == null) {
+            return ProbeReply.error(ProbeService.NO_SERVICE);
+        }
+        AccessibilityNodeInfo node = find(needle);
+        if (node == null) {
+            return ProbeReply.error("no node matching '" + needle + "'");
+        }
+        String description = nodeOf(node, 0).describe();
+        node.recycle();
+        return ProbeReply.ok(description);
+    }
+
     /** The action a screen reader's "type" and a voice keyboard's dictation use. */
-    static String setText(CharSequence find, String text) {
+    static ProbeReply setText(CharSequence find, String text) {
+        if (instance == null) {
+            return ProbeReply.error(ProbeService.NO_SERVICE);
+        }
+        if (find == null || find.length() == 0) {
+            return setTextOnFirstEditable(text);
+        }
         AccessibilityNodeInfo node = find(find);
         if (node == null) {
             return setTextOnFirstEditable(text);
@@ -660,12 +809,13 @@ public class ProbeService extends AccessibilityService {
                 + " editable=" + node.isEditable() + " -> " + performed;
         write("actions.txt", answer + "\n");
         node.recycle();
-        return answer;
+        return performed ? ProbeReply.ok(answer)
+                : ProbeReply.error(answer + " (the node did not accept ACTION_SET_TEXT)");
     }
 
-    private static String setTextOnFirstEditable(String text) {
+    private static ProbeReply setTextOnFirstEditable(String text) {
         if (instance == null) {
-            return "probe service is not running";
+            return ProbeReply.error(ProbeService.NO_SERVICE);
         }
         AccessibilityNodeInfo root = rootFor();
         if (root == null) {
@@ -683,8 +833,9 @@ public class ProbeService extends AccessibilityService {
                 List<AccessibilityWindowInfo> list = service.getWindows();
                 windows = list == null ? 0 : list.size();
             }
-            return "no window for " + (targetPackage == null ? "the active app" : targetPackage)
-                    + " (windows=" + windows + " active=" + active + ")";
+            return ProbeReply.error("no window for "
+                    + (targetPackage == null ? "the active app" : targetPackage)
+                    + " (windows=" + windows + " active=" + active + ")");
         }
         Deque<AccessibilityNodeInfo> pending = new ArrayDeque<>();
         pending.add(root);
@@ -701,7 +852,8 @@ public class ProbeService extends AccessibilityService {
                         + " package=" + node.getPackageName() + " -> " + performed;
                 write("actions.txt", answer + "\n");
                 root.recycle();
-                return answer;
+                return performed ? ProbeReply.ok(answer)
+                        : ProbeReply.error(answer + " (the node did not accept ACTION_SET_TEXT)");
             }
             for (int i = 0; i < node.getChildCount(); i++) {
                 AccessibilityNodeInfo child = node.getChild(i);
@@ -711,14 +863,17 @@ public class ProbeService extends AccessibilityService {
             }
         }
         root.recycle();
-        return "no editable node in the active window";
+        return ProbeReply.error("no editable node in the active window");
     }
 
     /** Moves accessibility focus, which is what TalkBack's swipe does. */
-    static String focus(CharSequence find) {
+    static ProbeReply focus(CharSequence find) {
+        if (instance == null) {
+            return ProbeReply.error(ProbeService.NO_SERVICE);
+        }
         AccessibilityNodeInfo node = find(find);
         if (node == null) {
-            return "no node matching " + find;
+            return ProbeReply.error("no node matching '" + find + "'");
         }
         boolean focused = node.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS);
         String answer = "A11Y_FOCUS on " + node.getClassName()
@@ -733,19 +888,25 @@ public class ProbeService extends AccessibilityService {
                 + " -> " + focused;
         write("actions.txt", answer + "\n");
         node.recycle();
-        return answer;
+        return focused ? ProbeReply.ok(answer)
+                : ProbeReply.error(
+                        answer + " (the node did not accept ACTION_ACCESSIBILITY_FOCUS)");
     }
 
-    static String click(CharSequence find) {
+    static ProbeReply click(CharSequence find) {
+        if (instance == null) {
+            return ProbeReply.error(ProbeService.NO_SERVICE);
+        }
         AccessibilityNodeInfo node = find(find);
         if (node == null) {
-            return "no node matching " + find;
+            return ProbeReply.error("no node matching '" + find + "'");
         }
         boolean clicked = node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
         String answer = "CLICK on " + node.getClassName() + " -> " + clicked;
         write("actions.txt", answer + "\n");
         node.recycle();
-        return answer;
+        return clicked ? ProbeReply.ok(answer)
+                : ProbeReply.error(answer + " (the node did not accept ACTION_CLICK)");
     }
 
     static void write(String name, String body) {

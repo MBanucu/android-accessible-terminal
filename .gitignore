@@ -2,6 +2,7 @@
 build/
 local.properties
 terminal/out/
+a11y-probe/out/
 samples/out/
 /out/
 *.apk

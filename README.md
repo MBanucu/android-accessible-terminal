@@ -67,7 +67,9 @@ repository or building its samples:
 - app id `io.github.mbanucu.a11yprobe`, versioned in its manifest;
 - version `1.0.0` of the APK, with a `.sha256` beside it, on every GitHub
   release;
-- commands under `io.github.mbanucu.a11yprobe.COMMAND`;
+- a synchronous `content call` surface at
+  `content://io.github.mbanucu.a11yprobe.control`;
+- the one-release broadcast action `io.github.mbanucu.a11yprobe.COMMAND`;
 - [`probe.sh`](probe.sh), which saves and restores the accessibility setting.
 
 Download the APK and the wrapper from a release tag (replace `<tag>` with the
@@ -100,8 +102,34 @@ sha256sum -c a11y-probe-1.0.0.apk.sha256
 adb install -r a11y-probe-1.0.0.apk
 ```
 
-With the service enabled, a command dumps the accessibility tree of the window in
-front and writes it to the app's own external files directory:
+With the service enabled, a `content call` performs one command and answers in
+the call. It can still write its file, but the caller no longer has to poll one:
+
+```bash
+CONTROL=content://io.github.mbanucu.a11yprobe.control
+
+# The tree in data=, and still in files/tree.txt.
+adb shell content call --uri $CONTROL --method dump --arg tree
+
+# find + click + wait for an event in one call, one result line each.
+adb shell "content call --uri $CONTROL --method batch --arg 'find OK
+click OK
+wait done timeout=3000'"
+
+# The JSON form, in data= and files/tree.json (which json.loads reads).
+adb shell content call --uri $CONTROL --method dump --arg tree --extra json:z:true
+
+# Version, service state, target and event/window counts.
+adb shell content call --uri $CONTROL --method status
+```
+
+A rejection answers `code=400` with a sentence and does not stop the probe; a
+`wait` blocks for at most 9 seconds and needs `--extra id:s:<uuid>` plus
+`--extra async:z:true` with `--method result` to wait longer. The reply and JSON
+schemas, the batch grammar and the request-id form are in
+[`a11y-probe/README.md`](a11y-probe/README.md#synchronous-commands-content-call).
+
+The one-release broadcast still works:
 
 ```bash
 adb shell am broadcast -a io.github.mbanucu.a11yprobe.COMMAND --es dump tree
@@ -132,12 +160,16 @@ and `bash probe.sh --legacy enable` to drive that APK.
 > (`/sdcard/Android/data/io.github.mbanucu.a11yprobe/files`), and disable it when
 > the run is over. `probe.sh enable` adds the probe to the list rather than
 > replacing a screen reader the owner already uses, and `probe.sh disable` puts
-> the list back.
+> the list back. The `content call` provider is exported with no permission, the
+> same boundary as the broadcast receiver: while the accessibility service is
+> enabled, any app on the device can call it. Uninstall the probe when it is not
+> needed.
 
 ## Building from source
 
 `bash terminal/test.sh` runs the JVM suites with nothing but a `javac` — no SDK,
-no Gradle, no device.
+no Gradle, no device. `bash a11y-probe/test.sh` runs the probe's protocol tests
+the same way: the JSON dump, the batch grammar and the reply codes.
 
 `bash samples/build.sh all` builds both demo apps with the SDK's tools and no
 Gradle, and `bash samples/e2e.sh` drives them on a connected device. The first
@@ -256,6 +288,7 @@ The demo app under `samples/` and the probe module are built without Gradle:
 
 ```bash
 bash a11y-probe/build.sh             # -> out/a11y-probe-1.0.0.apk and .sha256
+bash a11y-probe/test.sh              # the probe's protocol tests, on the JVM
 bash samples/build.sh all            # native-terminal, and the probe via its build.sh
 bash samples/e2e.sh                  # the fast checks, APK already installed
 bash samples/e2e.sh --opencode       # also drive opencode's TUI (slow)

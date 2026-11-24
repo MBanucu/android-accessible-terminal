@@ -215,6 +215,8 @@ TerminalView terminal = new TerminalView(context);
 terminal.setListener(line -> sendToTheProgram(line + "\r"));   // a submitted line
 terminal.setSizeListener((cols, rows) -> resizeThePty(cols, rows));
 terminal.feed(chunkFromThePty);        // often; a partial escape is buffered
+terminal.setRawInput(text -> writeToTheProgram(text));  // keys, mouse, paste
+terminal.paste(textFromTheClipboard);  // wrapped when the program asks for it
 ```
 
 `feed` takes whole chunks and does not care where they split: an escape sequence
@@ -237,6 +239,33 @@ asks for a blinking style (`DECSCUSR 1` or DEC mode 12). A full-screen program
 positions the caret and leaves drawing it to the terminal, so without that a TUI
 has no visible caret at all.
 
+### Touch, the mouse and paste
+
+Touch follows the program. With mouse reporting on (DEC modes 1000/1002/1003) one
+finger is the left button: a tap sends a press and a release, and a drag sends a
+press, the motion 1002/1003 asked for, and a release. A second finger turns the
+gesture into wheel ticks, one row per tick, so a TUI can still be scrolled;
+fingers moving down are wheel up, the direction the content moves. A real wheel
+or trackpad sends the same wheel buttons. The press waits until the gesture is
+known to be a click or drag, so starting a two-finger scroll does not leave a
+click behind.
+
+With reporting off, one finger drags the primary screen's history, a fling
+carries on at finger speed, and a tap focuses the prompt: the same path as before
+mouse support, and no bytes are sent to the program. Mouse reporting is also
+ignored when no raw-input listener is attached, so a view with no transport still
+scrolls. Reports use SGR (1006), urxvt (1015), or xterm's three-byte default when
+a program enables tracking without either encoding; the wheel is a press with
+the button codes 64-67 and has no release.
+
+`paste(text)` sends the text to a program on the alternate screen, wrapped in
+`ESC[200~` / `ESC[201~` when it enabled bracketed-paste mode (2004) and unchanged
+when it did not; an end marker that came in with the text is removed so a paste
+cannot close its own bracket. On the primary screen the text joins the prompt
+line, because the view owns that line and submits it later. The prompt node's
+`ACTION_PASTE` and the IME's paste action read the clipboard through the same
+method.
+
 ## What is here
 
 | type | role |
@@ -250,6 +279,8 @@ has no visible caret at all.
 | `Viewport` | the window over the history and the live grid: scroll offset, clamping, follow-at-bottom. Package-private |
 | `Selection` | an inclusive cell range over the viewport, and the text it copies with hard breaks kept and wrapped rows joined. Package-private |
 | `KeyEncoder` | the bytes a hardware key sends, normal or application-cursor mode. Package-private |
+| `MouseEncoder` | the bytes a mouse press, release, motion or wheel sends in tracking modes 1000/1002/1003 and encodings 1006/1015. Package-private |
+| `PasteEncoder` | the bytes a paste sends, with the `ESC[200~` / `ESC[201~` bracket when mode 2004 is on. Package-private |
 | `ReplySink` | the caller's write path for the answers a screen owes a querying program |
 | `TerminalAccessibility` | the row and prompt nodes, their events, and the announcement timer. Package-private |
 
@@ -258,7 +289,9 @@ arrows, Home/End, Page up/down, Insert/Delete, Esc, Tab, Backspace and F1-F12,
 with DECCKM switching arrows and Home/End to the `ESC O` forms. Ctrl, Alt and
 Shift modify a typed character or a cursor key: Alt+Left sends `ESC[1;3D`.
 Bracketed-paste mode (2004), focus reporting (1004/2031) and mouse modes
-1000/1002/1003 with 1006/1015 encodings are tracked; touch still scrolls.
+1000/1002/1003 with 1006/1015 encodings are tracked. Paste is wrapped when 2004
+is on, mouse reports follow the tracking mode, and focus events stay on the
+raw-input path the view already used.
 
 Queries are answered through a `ReplySink`: DA1/DA2, DSR and CPR, XTVERSION,
 the kitty keyboard query and OSC 10/11 colours. Point it at the pty's write path;
@@ -270,6 +303,8 @@ with no sink the screen stays quiet.
   `android.widget.TextView`, with text, bounds and accessibility-focus actions;
 - one editable node (class `android.widget.EditText`, `isEditable`, `ACTION_SET_TEXT`,
   `ACTION_PASTE`, `ACTION_FOCUS`) that also accepts the IME's `InputConnection`;
+  `ACTION_PASTE` reads the clipboard and sends it through `paste(text)`, so a
+  program that enabled 2004 gets the wrapped form;
 - `ACTION_SET_TEXT` text ending in a newline submits the line, because a service has
   no other way to press Enter on a view that is not an `EditText`;
 - `TYPE_WINDOW_CONTENT_CHANGED` per feed, and `TYPE_ANNOUNCEMENT` coalesced to at most
@@ -283,10 +318,10 @@ with no sink the screen stays quiet.
 `bash terminal/test.sh` compiles the grid, its history rows and colour tables,
 and the viewport with `src/test`, then runs them on the JVM. It discovers the
 sources and every `*Test.java` instead of naming them, and needs no device, no
-Gradle, no Android SDK and no test framework — only a `javac`. Fifteen suites (330 checks)
-cover cursor addressing, erases, insert/delete, scroll regions, scrollback,
-selection, SGR colour and attributes, the caret, wide characters, key encoding,
-input modes and query replies.
+Gradle, no Android SDK and no test framework — only a `javac`. Seventeen suites
+(423 checks) cover cursor addressing, erases, insert/delete, scroll regions,
+scrollback, selection, SGR colour and attributes, the caret, wide characters, key
+encoding, mouse encoding, paste wrapping, input modes and query replies.
 
 `TerminalView` and `TerminalAccessibility` import `android.*` and need
 `android.jar`; the view is covered on a device by the sample suite.
@@ -312,11 +347,12 @@ accessibility settings back afterwards.
 - **Not a VT emulator.** `SGR` colour is drawn — 16, 256 and truecolor, with
   `1` brightening a palette foreground — and so are underline, reverse, dim,
   italic, strikethrough and hidden. It keeps a primary-screen scrollback (the
-  alternate screen is the program's own) and a cell-range selection model that
-  copies hard breaks and wrapped rows correctly, but it has no long-press
-  handles, clipboard wiring or mouse events. Width-2 CJK glyphs take two cells
-  and wrap whole; combining marks and emoji do not. Enough to draw a TUI and
-  read it; not enough to be someone's daily terminal without more work.
+  alternate screen is the program's own), a cell-range selection model that
+  copies hard breaks and wrapped rows correctly, and mouse and paste input for a
+  program that asks. It has no long-press selection handles or touch selection
+  UI. Width-2 CJK glyphs take two cells and wrap whole; combining marks and emoji
+  do not. Enough to draw a TUI and read it; not enough to be someone's daily
+  terminal without more work.
 - **Not a transport.** An app-owned `forkpty` pty and Termux's `RUN_COMMAND`
   session are both in the sample, and both are the caller's business. The size
   callback is the whole contract between the view and the program.

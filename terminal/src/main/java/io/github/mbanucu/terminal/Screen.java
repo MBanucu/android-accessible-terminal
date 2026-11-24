@@ -14,7 +14,8 @@ import java.util.Arrays;
  * TUI's box is usually the background behind spaces.
  *
  * <p>Enough of ECMA-48 for a TUI, not an emulator: no scrolling regions across
- * buffers, no fonts, no mouse reporting, no replies to device queries.
+ * buffers, no fonts, no mouse reports of its own (the view encodes those), no
+ * replies to device queries of its own (a {@link ReplySink} carries them).
  */
 final class Screen implements EscapeParser.Handler {
 

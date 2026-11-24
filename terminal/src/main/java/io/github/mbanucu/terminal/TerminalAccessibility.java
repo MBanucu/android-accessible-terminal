@@ -238,6 +238,9 @@ final class TerminalAccessibility {
                 || action == AccessibilityNodeInfo.ACTION_FOCUS) {
             return focusForTyping();
         }
+        if (action == AccessibilityNodeInfo.ACTION_PASTE) {
+            return view.pasteFromClipboard();
+        }
         return false;
     }
 

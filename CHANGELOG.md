@@ -10,6 +10,19 @@ and this project adheres to
 
 ### Added
 
+- Mouse input and bracketed paste reach a program. `MouseEncoder` sends press,
+  release, motion and wheel reports for DEC tracking modes 1000/1002/1003 in SGR
+  (1006) and urxvt (1015), with xterm's three-byte form as the default when a
+  program enables tracking without an encoding. Touch follows the mode: with
+  tracking on, one finger is the left button and a second finger is the wheel;
+  with it off, drag-to-scroll and tap-to-type are unchanged and no mouse bytes
+  are sent. `PasteEncoder` wraps pasted text in `ESC[200~` / `ESC[201~` when
+  bracketed-paste mode (2004) is on, and `TerminalView.paste(String)`, the
+  prompt's `ACTION_PASTE` and the IME paste action read the clipboard through it.
+  Focus reports stay on the existing raw-input path. Two JVM suites cover every
+  event kind, both extended encodings and the paste bracket; the touch gesture
+  itself still needs the device check.
+
 - The accessibility probe is a first-class module, `a11y-probe/`, with package
   `io.github.mbanucu.a11yprobe`, version `1.0.0` in its manifest, action
   `io.github.mbanucu.a11yprobe.COMMAND`, and its own `build.sh`. The build writes

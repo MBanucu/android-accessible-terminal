@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs the grid's tests on the JVM. The screen model, its parser, history,
-# viewport, selection, key encoder and reply sink have no Android dependency,
-# so this needs no device, no Gradle and no test framework - only a javac.
+# viewport, selection, key encoder, mouse and paste encoders and reply sink have
+# no Android dependency, so this needs no device, no Gradle and no test
+# framework - only a javac.
 #
 # The files are found, not listed: a new model, and a new `*Test.java`, runs here
 # without editing this script - the same way the instrumented tests are found by

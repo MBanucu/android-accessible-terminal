@@ -1,5 +1,7 @@
 package io.github.mbanucu.terminal;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -99,6 +101,22 @@ public final class TerminalView extends View {
     private float touchRemainder;
     private boolean touchDragging;
     private VelocityTracker touchVelocity;
+    /** The button a mouse gesture reports, and where it went down. */
+    private int mouseButton = MouseEncoder.LEFT;
+    private float mouseDownX;
+    private float mouseDownY;
+    private int mouseDownCol;
+    private int mouseDownRow;
+    private int mouseLastCol;
+    private int mouseLastRow;
+    /** True once the press for this gesture reached the program. */
+    private boolean mousePressSent;
+    /** True once the finger moved far enough that this is a drag, not a tap. */
+    private boolean mouseDragged;
+    /** A second finger turns the gesture into wheel ticks. */
+    private boolean wheelGesture;
+    private float wheelLastY;
+    private float wheelRemainder;
     /** Carries a drag on after the finger lifts. */
     private final Scroller flinger = new Scroller(getContext());
 
@@ -192,6 +210,45 @@ public final class TerminalView extends View {
         startBlinking();
         accessibility.contentChanged();
         accessibility.announceSettledRows();
+    }
+
+    /**
+     * Pastes text, wrapped when the program asked for bracketed paste (2004).
+     *
+     * <p>On the alternate screen the text goes to the program immediately, as
+     * one paste block or unchanged. On the primary screen the view owns the
+     * prompt line, so the text joins that line and is submitted later like
+     * typed text; the shell's own paste bracket has nothing to wrap yet.
+     */
+    public void paste(String text) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        if (forwardsRawInput()) {
+            rawInput.onInput(PasteEncoder.encode(text, screen.bracketedPaste()));
+            return;
+        }
+        input.append(text);
+        inputChanged();
+    }
+
+    /** Reads the clipboard and pastes it; true when there was text to paste. */
+    boolean pasteFromClipboard() {
+        ClipboardManager clipboard = (ClipboardManager) getContext()
+                .getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboard == null || !clipboard.hasPrimaryClip()) {
+            return false;
+        }
+        ClipData clip = clipboard.getPrimaryClip();
+        if (clip == null || clip.getItemCount() == 0) {
+            return false;
+        }
+        CharSequence text = clip.getItemAt(0).coerceToText(getContext());
+        if (text == null || text.length() == 0) {
+            return false;
+        }
+        paste(text.toString());
+        return true;
     }
 
     /** The grid's cursor as {@code row,col}: what the sample logs, and what a test can assert. */
@@ -489,6 +546,14 @@ public final class TerminalView extends View {
             }
 
             @Override
+            public boolean performContextMenuAction(int id) {
+                if (id == android.R.id.paste) {
+                    return pasteFromClipboard();
+                }
+                return super.performContextMenuAction(id);
+            }
+
+            @Override
             public boolean performEditorAction(int actionCode) {
                 if (forwardsRawInput()) {
                     rawInput.onInput("\r");
@@ -643,14 +708,255 @@ public final class TerminalView extends View {
     }
 
     /**
+     * Touch is either the reader's scroll or the program's mouse.
+     *
+     * <p>While a program has mouse tracking on, one finger is a mouse: a tap
+     * presses and releases, a drag presses, moves and releases. A second
+     * finger turns the gesture into wheel ticks, so a TUI can still be
+     * scrolled. With tracking off the view keeps its own scrolling, fling and
+     * tap-to-type behaviour and sends no mouse bytes.
+     */
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        if (mouseReporting()) {
+            return onMouseTouch(event);
+        }
+        return onScrollTouch(event);
+    }
+
+    /** True when a program's tracking mode has somewhere to send its reports. */
+    private boolean mouseReporting() {
+        return rawInput != null && screen.mouseMode() != 0;
+    }
+
+    /**
+     * A touch that is the program's mouse: press/drag/release, or the wheel
+     * from two fingers.
+     */
+    private boolean onMouseTouch(MotionEvent event) {
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                flinger.forceFinished(true);
+                beginMouseGesture(event);
+                return true;
+            case MotionEvent.ACTION_POINTER_DOWN:
+                // A second finger means the wheel. A press that already
+                // reached the program is released first so it cannot stay held
+                // while the view scrolls.
+                if (mousePressSent) {
+                    sendMouse(MouseEncoder.RELEASE, mouseButton,
+                            mouseLastCol, mouseLastRow, event);
+                    mousePressSent = false;
+                }
+                wheelGesture = true;
+                wheelLastY = pointerY(event);
+                wheelRemainder = 0;
+                return true;
+            case MotionEvent.ACTION_MOVE:
+                if (wheelGesture) {
+                    wheel(event);
+                } else {
+                    dragMouse(event);
+                }
+                return true;
+            case MotionEvent.ACTION_POINTER_UP:
+                // Stay in the wheel gesture until the last finger lifts, so
+                // the remaining finger does not become a click.
+                return true;
+            case MotionEvent.ACTION_UP:
+                if (wheelGesture) {
+                    wheelGesture = false;
+                    recycleVelocity();
+                    return true;
+                }
+                finishMouseGesture(event);
+                return true;
+            case MotionEvent.ACTION_CANCEL:
+                if (mousePressSent) {
+                    sendMouse(MouseEncoder.RELEASE, mouseButton,
+                            mouseLastCol, mouseLastRow, event);
+                    mousePressSent = false;
+                }
+                wheelGesture = false;
+                recycleVelocity();
+                return true;
+            default:
+                return true;
+        }
+    }
+
+    private void beginMouseGesture(MotionEvent event) {
+        mouseButton = MouseEncoder.LEFT;
+        mouseDownX = event.getX();
+        mouseDownY = event.getY();
+        mouseDownCol = columnAt(mouseDownX);
+        mouseDownRow = rowAt(mouseDownY);
+        mouseLastCol = mouseDownCol;
+        mouseLastRow = mouseDownRow;
+        mousePressSent = false;
+        mouseDragged = false;
+        wheelGesture = false;
+        wheelRemainder = 0;
+    }
+
+    /**
+     * A one-finger move: the press waits until the gesture is known to be a
+     * drag, so a second finger can start a wheel without leaving a click.
+     */
+    private void dragMouse(MotionEvent event) {
+        if (!mousePressSent) {
+            if (!pastTapSlop(event)) {
+                return;
+            }
+            // The press belongs where the finger went down, then the motion
+            // that showed the gesture is a drag.
+            if (!sendMouse(MouseEncoder.PRESS, mouseButton,
+                    mouseDownCol, mouseDownRow, event)) {
+                return;
+            }
+            mousePressSent = true;
+            mouseDragged = true;
+        }
+        int col = columnAt(event.getX());
+        int row = rowAt(event.getY());
+        if (col == mouseLastCol && row == mouseLastRow) {
+            return;
+        }
+        sendMouse(MouseEncoder.MOTION, mouseButton, col, row, event);
+        mouseLastCol = col;
+        mouseLastRow = row;
+    }
+
+    /** A tap sends its press and release together; a drag already sent both ends. */
+    private void finishMouseGesture(MotionEvent event) {
+        int col = columnAt(event.getX());
+        int row = rowAt(event.getY());
+        if (!mousePressSent) {
+            mousePressSent = sendMouse(MouseEncoder.PRESS, mouseButton,
+                    mouseDownCol, mouseDownRow, event);
+        }
+        if (mousePressSent) {
+            sendMouse(MouseEncoder.RELEASE, mouseButton, col, row, event);
+        }
+        if (!mouseDragged) {
+            accessibility.focusForTyping();
+        }
+        mousePressSent = false;
+        recycleVelocity();
+    }
+
+    /**
+     * Two fingers scroll the program with wheel ticks.
+     *
+     * <p>Fingers moving down pull older content into view, which is wheel up,
+     * the same direction the reader's drag uses. One tick is one row.
+     */
+    private void wheel(MotionEvent event) {
+        float y = pointerY(event);
+        wheelRemainder += y - wheelLastY;
+        wheelLastY = y;
+        int ticks = (int) (wheelRemainder / Math.max(1f, cellHeight));
+        if (ticks == 0) {
+            return;
+        }
+        wheelRemainder -= ticks * cellHeight;
+        int col = columnAt(pointerX(event));
+        int row = rowAt(y);
+        int button = ticks > 0 ? MouseEncoder.WHEEL_UP : MouseEncoder.WHEEL_DOWN;
+        for (int i = 0; i < Math.abs(ticks); i++) {
+            sendMouse(MouseEncoder.WHEEL, button, col, row, event);
+        }
+        mouseLastCol = col;
+        mouseLastRow = row;
+    }
+
+    private boolean pastTapSlop(MotionEvent event) {
+        return Math.abs(event.getX() - mouseDownX) >= Math.max(1f, cellWidth / 2)
+                || Math.abs(event.getY() - mouseDownY) >= Math.max(1f, cellHeight / 2);
+    }
+
+    /** The cell a coordinate lands in, clamped to the grid. */
+    private int columnAt(float x) {
+        return Math.max(0, Math.min(screen.cols() - 1,
+                (int) (x / Math.max(1f, cellWidth))));
+    }
+
+    private int rowAt(float y) {
+        return Math.max(0, Math.min(screen.rows() - 1,
+                (int) (y / Math.max(1f, cellHeight))));
+    }
+
+    private static float pointerX(MotionEvent event) {
+        float sum = 0;
+        for (int i = 0; i < event.getPointerCount(); i++) {
+            sum += event.getX(i);
+        }
+        return sum / event.getPointerCount();
+    }
+
+    private static float pointerY(MotionEvent event) {
+        float sum = 0;
+        for (int i = 0; i < event.getPointerCount(); i++) {
+            sum += event.getY(i);
+        }
+        return sum / event.getPointerCount();
+    }
+
+    /** Sends one report, or nothing when the mode does not want it. */
+    private boolean sendMouse(int event, int button, int col, int row,
+            MotionEvent source) {
+        if (rawInput == null) {
+            return false;
+        }
+        String bytes = MouseEncoder.encode(screen.mouseMode(), screen.mouseEncoding(),
+                event, button, col, row,
+                (source.getMetaState() & KeyEvent.META_SHIFT_ON) != 0,
+                (source.getMetaState() & KeyEvent.META_ALT_ON) != 0,
+                (source.getMetaState() & KeyEvent.META_CTRL_ON) != 0);
+        if (bytes.isEmpty()) {
+            return false;
+        }
+        rawInput.onInput(bytes);
+        return true;
+    }
+
+    /**
+     * A real wheel, from a mouse or a trackpad, becomes the same wheel buttons
+     * the two-finger gesture sends.
+     */
+    @Override
+    public boolean onGenericMotionEvent(MotionEvent event) {
+        if (!mouseReporting() || event.getActionMasked() != MotionEvent.ACTION_SCROLL) {
+            return super.onGenericMotionEvent(event);
+        }
+        float vertical = event.getAxisValue(MotionEvent.AXIS_VSCROLL);
+        float horizontal = event.getAxisValue(MotionEvent.AXIS_HSCROLL);
+        int button = 0;
+        if (vertical > 0) {
+            button = MouseEncoder.WHEEL_UP;
+        } else if (vertical < 0) {
+            button = MouseEncoder.WHEEL_DOWN;
+        } else if (horizontal > 0) {
+            button = MouseEncoder.WHEEL_RIGHT;
+        } else if (horizontal < 0) {
+            button = MouseEncoder.WHEEL_LEFT;
+        }
+        if (button == 0) {
+            return super.onGenericMotionEvent(event);
+        }
+        sendMouse(MouseEncoder.WHEEL, button,
+                columnAt(event.getX()), rowAt(event.getY()), event);
+        return true;
+    }
+
+    /**
      * Dragging scrolls the log; a tap still asks for the keyboard.
      *
      * <p>Dragging down pulls older rows into view, the direction the content
      * moves under the finger. The remainder is kept in pixels between events so
      * a slow drag accumulates to a row instead of being rounded away each time.
      */
-    @Override
-    public boolean onTouchEvent(MotionEvent event) {
+    private boolean onScrollTouch(MotionEvent event) {
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
                 flinger.forceFinished(true);

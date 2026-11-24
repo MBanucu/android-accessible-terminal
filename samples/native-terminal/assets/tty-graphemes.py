@@ -21,7 +21,9 @@ out.write("\x1b[3;5HEND")
 out.write("\x1b[4;1H\U0001F600")
 out.write("\x1b[4;5HEND")
 
-# Column 80 cannot hold a two-column glyph: it belongs whole on row 6.
+# Column 80 cannot hold a two-column glyph: it belongs whole on row 6. The
+# view marks row 5 wrapped, so screenText() reports rows 5 and 6 as one logical
+# line; the emoji must be at column 1 of that line, not indented to column 80.
 out.write("\x1b[5;80H\U0001F600")
 out.write("\x1b[6;5HEND")
 

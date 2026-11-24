@@ -31,6 +31,7 @@ public final class GraphemeTest {
         surrogatePairSplitAcrossFeeds();
         cursorMovement();
         erase();
+        eraseAtAWideGlyphBoundary();
         wrapping();
         history();
         resize();
@@ -149,6 +150,32 @@ public final class GraphemeTest {
         Screen display = new Screen(10, 3);
         display.feed(E_ACUTE + EMOJI + "\u001b[2J");
         check("ED 2 clears clusters with the screen", "", display.text());
+    }
+
+    private static void eraseAtAWideGlyphBoundary() {
+        // The cursor can sit between the two cells of a wide glyph. An erase that
+        // starts or ends there must not leave the other half drawn on its own.
+        Screen line = new Screen(4, 2);
+        line.feed("a\u65e5b\u001b[1;3H\u001b[0K");
+        check("EL 0 starting on a continuation clears its base", "a", line.line(0));
+        check("both halves of the cut glyph are blank", "  ",
+                line.cell(0, 1) + line.cell(0, 2));
+
+        Screen lineBack = new Screen(4, 2);
+        lineBack.feed("a\u65e5b\u001b[1;2H\u001b[1K");
+        check("EL 1 ending on a wide base clears its continuation", "   b",
+                lineBack.line(0));
+        check("the orphaned continuation is blank", " ", lineBack.cell(0, 2));
+
+        Screen display = new Screen(4, 2);
+        display.feed("a\u65e5b\u001b[1;3H\u001b[0J");
+        check("ED 0 starting on a continuation clears its base", "a",
+                display.line(0));
+
+        Screen displayBack = new Screen(4, 2);
+        displayBack.feed("a\u65e5b\u001b[1;2H\u001b[1J");
+        check("ED 1 ending on a wide base clears its continuation", "   b",
+                displayBack.line(0));
     }
 
     private static void wrapping() {

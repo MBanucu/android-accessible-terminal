@@ -1720,6 +1720,11 @@ test_insert_and_delete() {
 # column, so the row text shows how many cells the cluster took. A combining
 # mark that took a column of its own would put END at the wrong position, and a
 # surrogate pair would leave a replacement character instead of one glyph.
+#
+# `screenText()` joins a row the view marked wrapped, so the emoji written at
+# column 80 and its END are one logical line (row 5 here), and row 6 is blank.
+# A glyph cut at the edge would instead leave 79 spaces before the emoji on row
+# 5, which the exact match below rejects.
 test_grapheme_cells() {
     launch --ez graphemes true
     if ! await "TTY-GRAPHEMES" 30; then
@@ -1740,12 +1745,12 @@ test_grapheme_cells() {
     [ "$row4" = "$emoji  END" ] \
         && ok "graphemes: the emoji took two cells" \
         || bad "graphemes: the emoji's width is wrong (row 4: '$row4')"
-    [ -z "$row5" ] \
-        && ok "graphemes: an emoji on column 80 did not split on that row" \
-        || bad "graphemes: column 80 kept half a glyph (row 5: '$row5')"
-    [ "$row6" = "$emoji  END" ] \
-        && ok "graphemes: the emoji wrapped whole to the next row" \
-        || bad "graphemes: the wrapped emoji is not whole (row 6: '$row6')"
+    [ "$row5" = "$emoji  END" ] \
+        && ok "graphemes: an emoji on column 80 wrapped whole to the next row" \
+        || bad "graphemes: column 80 split or indented the glyph (row 5: '$row5')"
+    [ -z "$row6" ] \
+        && ok "graphemes: the wrapped emoji row is joined by the wrapped flag" \
+        || bad "graphemes: the wrapped row was reported as a second line (row 6: '$row6')"
 }
 
 # --- typing under load ---------------------------------------------------------

@@ -804,6 +804,8 @@ final class Screen implements EscapeParser.Handler {
             Arrays.fill(colours[cursorRow], 0, Math.min(cols, cursorCol + 1), 0);
             Arrays.fill(backgrounds[cursorRow], 0, Math.min(cols, cursorCol + 1), sgr.background());
             Arrays.fill(attributes[cursorRow], 0, Math.min(cols, cursorCol + 1), 0);
+            // The boundary can fall between a wide glyph's halves.
+            normalizeRow(cursorRow);
             return;
         }
         Arrays.fill(cells[cursorRow], cursorCol, cols, Cell.BLANK);
@@ -817,6 +819,8 @@ final class Screen implements EscapeParser.Handler {
             Arrays.fill(attributes[row], 0);
             wrapped[row] = false;
         }
+        // ED 0 starts at the cursor, which may be the second half of a wide glyph.
+        normalizeRow(cursorRow);
     }
 
     void eraseLine(int mode) {
@@ -837,6 +841,8 @@ final class Screen implements EscapeParser.Handler {
             Arrays.fill(backgrounds[cursorRow], cursorCol, cols, sgr.background());
             Arrays.fill(attributes[cursorRow], cursorCol, cols, 0);
         }
+        // EL 0 and EL 1 can start or end on a wide glyph's continuation.
+        normalizeRow(cursorRow);
     }
 
     void eraseChars(int count) {

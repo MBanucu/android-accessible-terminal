@@ -6,8 +6,9 @@ import java.lang.reflect.Method;
 /**
  * Runs every suite named on the command line in one JVM.
  *
- * <p>A {@code java} start costs more than the checks themselves: fifteen files,
- * fifteen starts, about two seconds of the suite's four. The instrumented tests
+ * <p>A {@code java} start costs more than the checks themselves: one file per
+ * suite, one JVM start per suite, and the starts were about half the suite's
+ * clock. The instrumented tests
  * got the same time back by running three classes in one instrumentation run, so
  * this does the same for the JVM suites. The names come from
  * {@code terminal/test.sh}, which finds the files; nothing is listed here.

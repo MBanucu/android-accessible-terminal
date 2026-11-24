@@ -205,9 +205,11 @@ ls ~/.m2/repository/io/github/mbanucu/android-accessible-terminal/0.0.0-smoke/
 rm -rf ~/.m2/repository/io/github/mbanucu/android-accessible-terminal/0.0.0-smoke
 ```
 
-`nmcpZipAggregation` builds the exact bundle the release workflow uploads. With
-`SIGNING_KEY` unset it has no signatures; to exercise signing, use a throwaway
-key and never pass the bundle to the portal:
+`nmcpZipAggregation` builds the exact bundle the release workflow uploads.
+CI runs `publishToMavenLocal` and a signed `nmcpZipAggregation` with a throwaway
+key on every push, so both release paths are checked without a repository
+secret. With `SIGNING_KEY` unset the bundle has no signatures; to exercise
+signing locally, use a throwaway key and never pass the bundle to the portal:
 
 ```bash
 temp_gpg=$(mktemp -d)

@@ -76,6 +76,31 @@ jobs:
         run: >-
           ./gradlew --no-daemon --warning-mode all --configuration-cache
           checkBuildEnv assembleRelease
+      # The publishing path, without credentials: the AAR, POM, module metadata
+      # and both jars must reach ~/.m2 under the version passed in.
+      - name: Publish to Maven Local
+        run: |
+          ./gradlew --no-daemon --warning-mode all --configuration-cache \
+            publishToMavenLocal -Pversion=0.0.0-ci
+          artifact="$HOME/.m2/repository/io/github/mbanucu/android-accessible-terminal/0.0.0-ci"
+          test -f "$artifact/android-accessible-terminal-0.0.0-ci.aar"
+          test -f "$artifact/android-accessible-terminal-0.0.0-ci.pom"
+          test -f "$artifact/android-accessible-terminal-0.0.0-ci-sources.jar"
+          test -f "$artifact/android-accessible-terminal-0.0.0-ci-javadoc.jar"
+          rm -rf "$artifact"
+      # Signing is a release path too. A throwaway key exercises it without a
+      # repository secret, and the bundle is never uploaded.
+      - name: Sign the bundle with a throwaway key
+        run: |
+          temp_gpg=$(mktemp -d)
+          GNUPGHOME="$temp_gpg" gpg --batch --passphrase '' --quick-generate-key \
+            'CI Smoke <ci@example.invalid>' ed25519 sign 1d
+          export SIGNING_KEY="$(GNUPGHOME="$temp_gpg" gpg --armor --export-secret-keys)"
+          export SIGNING_PASSWORD=''
+          ./gradlew --no-daemon --warning-mode all --configuration-cache \
+            nmcpZipAggregation -PVERSION_NAME=0.0.0-ci-sign
+          unzip -l build/nmcp/zip/aggregation.zip | grep '\.asc$'
+          rm -rf "$temp_gpg"
       # The bundle the release workflow uploads, built without credentials: this
       # catches a missing sources or javadoc jar before a tag does.
       - name: Build the release bundle

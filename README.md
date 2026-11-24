@@ -217,6 +217,7 @@ terminal.setSizeListener((cols, rows) -> resizeThePty(cols, rows));
 terminal.feed(chunkFromThePty);        // often; a partial escape is buffered
 terminal.setRawInput(text -> writeToTheProgram(text));  // keys, mouse, paste
 terminal.paste(textFromTheClipboard);  // wrapped when the program asks for it
+terminal.copySelection();              // exactly the selected cells
 ```
 
 `feed` takes whole chunks and does not care where they split: an escape sequence
@@ -232,6 +233,21 @@ Dragging the view scrolls back through the primary screen's history, and a fling
 carries on at finger speed. While scrolled back, output that pushes rows into
 history keeps the row being read in place rather than sliding it away; a view at
 the bottom follows new output, and typing returns it to the bottom.
+
+A long press selects the word under the finger, or the line when the press lands
+on a blank cell. Two blue handles appear at the ends of the range, distinct from
+the caret's block; dragging one extends the selection across rows, and past the
+edge of the view into history. `selectedText()` is exactly `Selection.text()`:
+hard line breaks are kept and a row the terminal wrapped is joined to its
+continuation. `copySelection()` puts that text on the clipboard and returns
+false when there is no selection; `clearSelection()` drops it. The selection
+names absolute buffer rows, so scrolling does not move it, a resize clamps it to
+the new grid, and a full scrollback clamps it when the row it named is dropped.
+
+Selection copy is separate from the whole-screen copy the host app already has:
+that action still reads `screenText()`, which includes history and the line being
+typed, and is unaffected by a selection. There is no link handling in either
+path.
 
 On the alternate screen the caret is the view's to draw: a block at the grid's
 cursor, hidden while the program says DEC mode 25 is off, and blinking when it
@@ -252,9 +268,13 @@ click behind.
 
 With reporting off, one finger drags the primary screen's history, a fling
 carries on at finger speed, and a tap focuses the prompt: the same path as before
-mouse support, and no bytes are sent to the program. Mouse reporting is also
-ignored when no raw-input listener is attached, so a view with no transport still
-scrolls. Reports use SGR (1006), urxvt (1015), or xterm's three-byte default when
+mouse support, and no bytes are sent to the program. A press that stays still
+becomes the selection long press instead; moving before the timeout is still a
+scroll, so drag and fling coexist with it. A press on a handle drags the range;
+elsewhere a drag scrolls with the range still on its cells, and a tap clears it.
+Mouse reporting is also ignored when no raw-input listener is attached, so a
+view with no transport still scrolls. Reports use SGR (1006), urxvt (1015), or
+xterm's three-byte default when
 a program enables tracking without either encoding; the wheel is a press with
 the button codes 64-67 and has no release.
 
@@ -277,7 +297,7 @@ method.
 | `CellAttributes` | the per-cell SGR bits the view draws differently: underline, reverse, dim, italic, strikethrough, hidden. Package-private |
 | `Width` | the display width of a character in cells: 2 for CJK/fullwidth, 1 otherwise. Package-private |
 | `Viewport` | the window over the history and the live grid: scroll offset, clamping, follow-at-bottom. Package-private |
-| `Selection` | an inclusive cell range over the viewport, and the text it copies with hard breaks kept and wrapped rows joined. Package-private |
+| `Selection` | an inclusive cell range over the primary buffer or alternate screen, its word/line start, its clamped ends, and the text it copies with hard breaks kept and wrapped rows joined. Package-private |
 | `KeyEncoder` | the bytes a hardware key sends, normal or application-cursor mode. Package-private |
 | `MouseEncoder` | the bytes a mouse press, release, motion or wheel sends in tracking modes 1000/1002/1003 and encodings 1006/1015. Package-private |
 | `PasteEncoder` | the bytes a paste sends, with the `ESC[200~` / `ESC[201~` bracket when mode 2004 is on. Package-private |
@@ -319,7 +339,7 @@ with no sink the screen stays quiet.
 and the viewport with `src/test`, then runs them on the JVM. It discovers the
 sources and every `*Test.java` instead of naming them, and needs no device, no
 Gradle, no Android SDK and no test framework — only a `javac`. Eighteen suites
-(483 checks) cover cursor addressing, erases, insert/delete, scroll regions,
+(519 checks) cover cursor addressing, erases, insert/delete, scroll regions,
 scrollback, selection, SGR colour and attributes, the caret, wide characters,
 combining marks and emoji cells, key encoding, mouse encoding, paste wrapping,
 input modes and query replies.
@@ -348,10 +368,10 @@ accessibility settings back afterwards.
 - **Not a VT emulator.** `SGR` colour is drawn — 16, 256 and truecolor, with
   `1` brightening a palette foreground — and so are underline, reverse, dim,
   italic, strikethrough and hidden. It keeps a primary-screen scrollback (the
-  alternate screen is the program's own), a cell-range selection model that
-  copies hard breaks and wrapped rows correctly, and mouse and paste input for a
-  program that asks. It has no long-press selection handles or touch selection
-  UI. A cell holds a base code point and its combining marks, so `e` + U+0301 is
+  alternate screen is the program's own), a long-press word/line selection with
+  drag handles that copies hard breaks and wrapped rows correctly, and mouse and
+  paste input for a program that asks. A cell holds a base code point and its
+  combining marks, so `e` + U+0301 is
   one cell and copies as the original two code points; a wide or emoji glyph
   takes the two cells the width table gives it and wraps whole at the right
   edge. ZWJ emoji sequences and variation selectors are not joined into one

@@ -11,10 +11,12 @@ import android.graphics.Typeface;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.SpannableStringBuilder;
+import android.view.HapticFeedbackConstants;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.VelocityTracker;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityNodeProvider;
 import android.view.inputmethod.BaseInputConnection;
@@ -74,9 +76,17 @@ public final class TerminalView extends View {
     private static final int TEXT_COLOR = 0xFFDCDCDC;
     /** The page's own colour, behind every cell. */
     private static final int WINDOW_BACKGROUND = 0xFF101418;
+    /** The wash behind selected cells; translucent so the glyphs stay legible. */
+    private static final int SELECTION_COLOR = 0x805E9BD8;
+    /** The colour of the two handles, deliberately not the caret's green. */
+    private static final int HANDLE_COLOR = 0xFF4A90D9;
+    private static final int HANDLE_NONE = 0;
+    private static final int HANDLE_START = 1;
+    private static final int HANDLE_END = 2;
 
     private final Screen screen = new Screen(80, 24);
     private final Viewport viewport = new Viewport(screen);
+    private final Selection selection = new Selection(screen, viewport);
     private final SpannableStringBuilder input = new SpannableStringBuilder();
     private final TerminalAccessibility accessibility =
             new TerminalAccessibility(this, screen, viewport, input);
@@ -101,6 +111,18 @@ public final class TerminalView extends View {
     private float touchRemainder;
     private boolean touchDragging;
     private VelocityTracker touchVelocity;
+    /** A press that has not moved yet, and may become a selection. */
+    private float touchDownX;
+    private float touchDownY;
+    private boolean longPressPending;
+    /** True once the long press selected a word or line. */
+    private boolean longPressSelected;
+    /** A drag on one of the selection's handles, not a scroll. */
+    private boolean handleDragging;
+    /** The stored endpoint the handle drag moves; the other stays put. */
+    private boolean handleAnchor;
+    /** The distance a finger may move before a press is a drag instead. */
+    private final int touchSlop;
     /** The button a mouse gesture reports, and where it went down. */
     private int mouseButton = MouseEncoder.LEFT;
     private float mouseDownX;
@@ -142,8 +164,30 @@ public final class TerminalView extends View {
         }
     };
 
+    /**
+     * A press that stayed still long enough to mean a selection instead of a
+     * scroll. The word under the finger is selected; a blank cell selects its
+     * line, which is what a long press on a terminal's empty right side should
+     * do.
+     */
+    private final Runnable longPress = new Runnable() {
+        @Override
+        public void run() {
+            if (!longPressPending) {
+                return;
+            }
+            longPressPending = false;
+            longPressSelected = true;
+            touchDragging = false;
+            selection.selectWordOrLineAt(rowAt(touchDownY), columnAt(touchDownX));
+            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+            invalidate();
+        }
+    };
+
     public TerminalView(Context context) {
         super(context);
+        touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
         setFocusable(true);
         setFocusableInTouchMode(true);
         setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
@@ -200,12 +244,21 @@ public final class TerminalView extends View {
         if (chunk == null || chunk.isEmpty()) {
             return;
         }
+        boolean wasAlternate = screen.isAlternate();
         int before = screen.historyRows();
         screen.feed(chunk);
+        if (screen.isAlternate() != wasAlternate) {
+            // The primary screen's rows are not the program's; a range on one
+            // cannot name cells on the other.
+            selection.clear();
+        }
         // A view scrolled back keeps its place while output grows the log; at
         // the bottom it follows, and a full-screen program returns it.
         viewport.followOutput(screen.historyRows() - before);
         viewport.clamp();
+        // A full scrollback drops old rows, and those rows shift the numbering
+        // the selection uses.
+        selection.clamp();
         invalidate();
         startBlinking();
         accessibility.contentChanged();
@@ -234,8 +287,7 @@ public final class TerminalView extends View {
 
     /** Reads the clipboard and pastes it; true when there was text to paste. */
     boolean pasteFromClipboard() {
-        ClipboardManager clipboard = (ClipboardManager) getContext()
-                .getSystemService(Context.CLIPBOARD_SERVICE);
+        ClipboardManager clipboard = clipboard();
         if (clipboard == null || !clipboard.hasPrimaryClip()) {
             return false;
         }
@@ -265,6 +317,57 @@ public final class TerminalView extends View {
             all.append("$ ").append(input).append('\n');
         }
         return all.toString();
+    }
+
+    /** True when a long press or a handle has a range on screen. */
+    public boolean hasSelection() {
+        return !selection.isEmpty();
+    }
+
+    /**
+     * Exactly the selected cells, as {@link Selection} joins them: hard breaks
+     * are kept and rows the terminal wrapped are one logical line.
+     */
+    public String selectedText() {
+        return selection.text();
+    }
+
+    /** Drops the selection without touching the clipboard. */
+    public void clearSelection() {
+        if (selection.isEmpty()) {
+            return;
+        }
+        selection.clear();
+        invalidate();
+    }
+
+    /**
+     * Puts the selection on the clipboard and returns true when there was one.
+     *
+     * <p>This is the selection copy only. The whole-screen copy the host app
+     * already offers is separate and keeps reading {@link #screenText()}; a
+     * selection never changes what that action copies.
+     */
+    public boolean copySelection() {
+        if (selection.isEmpty()) {
+            return false;
+        }
+        ClipboardManager clipboard = clipboard();
+        if (clipboard == null) {
+            return false;
+        }
+        clipboard.setPrimaryClip(ClipData.newPlainText("terminal selection",
+                selection.text()));
+        return true;
+    }
+
+    /** How many history rows are above the top of the view; 0 at the bottom. */
+    public int scrollOffset() {
+        return viewport.offset();
+    }
+
+    private ClipboardManager clipboard() {
+        return (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
     }
 
     /**
@@ -301,6 +404,7 @@ public final class TerminalView extends View {
         if (cols != screen.cols() || rows != screen.rows()) {
             screen.resize(cols, rows);
             viewport.clamp();
+            selection.clamp();
             accessibility.resetRows();
             if (sizeListener != null) {
                 sizeListener.onGridSize(cols, rows);
@@ -325,6 +429,13 @@ public final class TerminalView extends View {
                         viewport.background(row, col));
                 if (fill != 0) {
                     paint.setColor(fill);
+                    canvas.drawRect(col * cellWidth, row * cellHeight,
+                            (col + 1) * cellWidth, (row + 1) * cellHeight, paint);
+                }
+                // Drawn with the backgrounds, before the glyphs, so the text
+                // stays on top of the wash and remains readable.
+                if (selection.contains(row, col)) {
+                    paint.setColor(SELECTION_COLOR);
                     canvas.drawRect(col * cellWidth, row * cellHeight,
                             (col + 1) * cellWidth, (row + 1) * cellHeight, paint);
                 }
@@ -365,6 +476,7 @@ public final class TerminalView extends View {
                 }
             }
         }
+        drawSelectionHandles(canvas);
         paint.setTypeface(typeface);
         paint.setColor(TEXT_COLOR);
         // A full-screen program leaves the caret to the terminal: it says whether
@@ -423,6 +535,36 @@ public final class TerminalView extends View {
         }
     }
 
+    /**
+     * The two handles: a dot at the start cell's left edge and one at the end
+     * cell's right edge, both on the row's middle so they do not look like the
+     * block caret. Only a handle whose row is visible is drawn.
+     */
+    private void drawSelectionHandles(Canvas canvas) {
+        if (selection.isEmpty()) {
+            return;
+        }
+        int startRow = selection.startRow();
+        int endRow = selection.endRow();
+        Paint handle = new Paint(paint);
+        handle.setColor(HANDLE_COLOR);
+        handle.setStyle(Paint.Style.FILL);
+        float radius = handleRadius();
+        if (startRow >= 0 && startRow < screen.rows()) {
+            canvas.drawCircle(selection.startCol() * cellWidth,
+                    (startRow + 0.5f) * cellHeight, radius, handle);
+        }
+        if (endRow >= 0 && endRow < screen.rows()) {
+            canvas.drawCircle((selection.endCol() + 1) * cellWidth,
+                    (endRow + 0.5f) * cellHeight, radius, handle);
+        }
+    }
+
+    /** The drawn radius of a handle, small enough not to hide the word under it. */
+    private float handleRadius() {
+        return Math.max(4f, Math.min(cellWidth, cellHeight) * 0.45f);
+    }
+
     /** The colour a cell's background is filled with, after reverse. */
     private int fillColour(int attributes, int fg, int bg) {
         if (CellAttributes.has(attributes, CellAttributes.REVERSE)) {
@@ -476,6 +618,8 @@ public final class TerminalView extends View {
     @Override
     protected void onDetachedFromWindow() {
         removeCallbacks(blinker);
+        removeCallbacks(longPress);
+        longPressPending = false;
         blinking = false;
         super.onDetachedFromWindow();
     }
@@ -960,6 +1104,27 @@ public final class TerminalView extends View {
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
                 flinger.forceFinished(true);
+                removeCallbacks(longPress);
+                longPressPending = false;
+                longPressSelected = false;
+                handleDragging = false;
+                // A touch on a handle continues the selection. Anywhere else
+                // may become a scroll, which leaves the range on its cells, or
+                // a tap, which drops it at UP.
+                int handle = handleAt(event.getX(), event.getY());
+                if (handle != HANDLE_NONE) {
+                    handleDragging = true;
+                    handleAnchor = handle == HANDLE_START
+                            ? selection.anchorIsFirst()
+                            : !selection.anchorIsFirst();
+                    touchDragging = false;
+                    return true;
+                }
+                touchDownX = event.getX();
+                touchDownY = event.getY();
+                longPressPending = true;
+                postDelayed(longPress,
+                        ViewConfiguration.get(getContext()).getLongPressTimeout());
                 touchLastY = event.getY();
                 touchRemainder = 0;
                 touchDragging = false;
@@ -971,7 +1136,26 @@ public final class TerminalView extends View {
                 touchVelocity.addMovement(event);
                 return true;
             case MotionEvent.ACTION_MOVE:
+                if (handleDragging) {
+                    dragHandle(event);
+                    return true;
+                }
                 touchVelocity.addMovement(event);
+                if (longPressSelected) {
+                    // The long press already chose a word; moving now would be
+                    // a scroll, and the handles are how this range grows.
+                    return true;
+                }
+                if (longPressPending) {
+                    if (Math.abs(event.getX() - touchDownX) <= touchSlop
+                            && Math.abs(event.getY() - touchDownY) <= touchSlop) {
+                        return true;
+                    }
+                    // The finger moved before the long press came due, so this
+                    // gesture is the reader's scroll, not a selection.
+                    longPressPending = false;
+                    removeCallbacks(longPress);
+                }
                 touchRemainder += event.getY() - touchLastY;
                 touchLastY = event.getY();
                 if (Math.abs(touchRemainder) >= cellHeight / 2) {
@@ -985,21 +1169,109 @@ public final class TerminalView extends View {
                 }
                 return true;
             case MotionEvent.ACTION_UP:
+                removeCallbacks(longPress);
+                if (handleDragging) {
+                    handleDragging = false;
+                    recycleVelocity();
+                    invalidate();
+                    return true;
+                }
+                if (longPressSelected) {
+                    longPressSelected = false;
+                    recycleVelocity();
+                    return true;
+                }
+                if (longPressPending) {
+                    longPressPending = false;
+                    recycleVelocity();
+                    clearSelection();
+                    accessibility.focusForTyping();
+                    return true;
+                }
                 touchVelocity.addMovement(event);
                 touchVelocity.computeCurrentVelocity(1000);
                 if (touchDragging) {
+                    // A scroll keeps the selection: it names buffer rows, so
+                    // the range is still on its text after the viewport moves.
                     fling((int) touchVelocity.getYVelocity());
                 } else {
+                    clearSelection();
                     accessibility.focusForTyping();
                 }
                 recycleVelocity();
                 return true;
             case MotionEvent.ACTION_CANCEL:
+                removeCallbacks(longPress);
+                longPressPending = false;
+                longPressSelected = false;
+                handleDragging = false;
                 recycleVelocity();
                 return true;
             default:
                 return true;
         }
+    }
+
+    /**
+     * The handle under a point, if any: nearest wins when a one-cell selection
+     * puts the two handles a column apart.
+     */
+    private int handleAt(float x, float y) {
+        if (selection.isEmpty()) {
+            return HANDLE_NONE;
+        }
+        float radius = Math.max(24f, Math.min(cellWidth, cellHeight));
+        int startRow = selection.startRow();
+        int endRow = selection.endRow();
+        float startX = selection.startCol() * cellWidth;
+        float startY = (startRow + 0.5f) * cellHeight;
+        float endX = (selection.endCol() + 1) * cellWidth;
+        float endY = (endRow + 0.5f) * cellHeight;
+        boolean startVisible = startRow >= 0 && startRow < screen.rows();
+        boolean endVisible = endRow >= 0 && endRow < screen.rows();
+        float startDistance = startVisible
+                ? distance(x, y, startX, startY) : Float.MAX_VALUE;
+        float endDistance = endVisible
+                ? distance(x, y, endX, endY) : Float.MAX_VALUE;
+        if (startDistance > radius && endDistance > radius) {
+            return HANDLE_NONE;
+        }
+        return startDistance <= endDistance ? HANDLE_START : HANDLE_END;
+    }
+
+    private static float distance(float x, float y, float toX, float toY) {
+        float dx = x - toX;
+        float dy = y - toY;
+        return (float) Math.sqrt(dx * dx + dy * dy);
+    }
+
+    /**
+     * Moves the dragged handle to the finger, and scrolls the viewport when the
+     * finger leaves it so a range can cross from the live grid into history.
+     */
+    private void dragHandle(MotionEvent event) {
+        float x = event.getX();
+        float y = event.getY();
+        float edge = Math.max(1f, cellHeight);
+        int row;
+        if (y < edge && viewport.offset() < viewport.maxOffset()) {
+            // Held at the top: pull an older history row in and keep the handle
+            // on the edge, so a drag can walk back through the scrollback.
+            viewport.scrollBy(1);
+            row = 0;
+        } else if (y > getHeight() - edge && viewport.offset() > 0) {
+            viewport.scrollBy(-1);
+            row = screen.rows() - 1;
+        } else {
+            row = rowAt(y);
+        }
+        int col = columnAt(x);
+        if (handleAnchor) {
+            selection.setAnchor(row, col);
+        } else {
+            selection.setFocus(row, col);
+        }
+        invalidate();
     }
 
     private void recycleVelocity() {

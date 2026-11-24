@@ -4,6 +4,8 @@ import io.github.mbanucu.terminal.TerminalView;
 
 import android.app.Activity;
 import android.content.BroadcastReceiver;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -64,6 +66,21 @@ public final class MainActivity extends Activity {
     public static final String ACTION_DUMP =
             "io.github.mbanucu.samples.nativeterminal.action.DUMP";
 
+    /**
+     * Reports or copies the selection, for the touch check.
+     *
+     * <p>{@code --es selectionAction state} writes the selected text without
+     * touching the clipboard; {@code copy} copies it through
+     * {@link TerminalView#copySelection()} and writes what the clipboard then
+     * holds; {@code copy-all} copies {@code screenText()} instead, so the
+     * separate whole-screen action is exercised beside the selection one.
+     *
+     * <p>The text is base64 in the evidence so a newline stays one field.
+     * Exported for the same diagnostic reason as {@link #ACTION_RESIZE}.
+     */
+    public static final String ACTION_SELECTION =
+            "io.github.mbanucu.samples.nativeterminal.action.SELECTION";
+
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final StringBuilder transcript = new StringBuilder();
     private TerminalView terminal;
@@ -83,12 +100,15 @@ public final class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         IntentFilter resizes = new IntentFilter(ACTION_RESIZE);
         IntentFilter dumps = new IntentFilter(ACTION_DUMP);
+        IntentFilter selections = new IntentFilter(ACTION_SELECTION);
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             registerReceiver(resizeReceiver, resizes, Context.RECEIVER_EXPORTED);
             registerReceiver(dumpReceiver, dumps, Context.RECEIVER_EXPORTED);
+            registerReceiver(selectionReceiver, selections, Context.RECEIVER_EXPORTED);
         } else {
             registerReceiver(resizeReceiver, resizes);
             registerReceiver(dumpReceiver, dumps);
+            registerReceiver(selectionReceiver, selections);
         }
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -196,6 +216,8 @@ public final class MainActivity extends Activity {
                 && getIntent().getBooleanExtra("edit", false);
         boolean graphemes = getIntent() != null
                 && getIntent().getBooleanExtra("graphemes", false);
+        boolean selectionDemo = getIntent() != null
+                && getIntent().getBooleanExtra("selection", false);
         boolean typing = getIntent() != null
                 && getIntent().getBooleanExtra("typing", false);
         boolean tuiTyping = getIntent() != null
@@ -253,6 +275,8 @@ public final class MainActivity extends Activity {
             startTui("tty-edit.py", "tty-edit");
         } else if (graphemes) {
             startTui("tty-graphemes.py", "tty-graphemes");
+        } else if (selectionDemo) {
+            startSelectionDemo();
         } else if (typing) {
             startTui("tty-typing.py", "tty-typing");
         } else if (tuiTypingLoad) {
@@ -319,6 +343,36 @@ public final class MainActivity extends Activity {
         @Override
         public void onReceive(Context from, Intent intent) {
             writeEvidence("dump cursor=" + (terminal == null ? "?" : terminal.cursor()));
+        }
+    };
+
+    /** Reports or copies what the touch selection chose. */
+    private final BroadcastReceiver selectionReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context from, Intent intent) {
+            if (terminal == null || intent == null) {
+                return;
+            }
+            String action = intent.getStringExtra("selectionAction");
+            if ("copy".equals(action)) {
+                boolean copied = terminal.copySelection();
+                writeEvidence("selection:copy scroll=" + terminal.scrollOffset()
+                        + " copied=" + copied
+                        + " selected=" + base64(terminal.selectedText())
+                        + " clipboard=" + base64(readClipboard()));
+            } else if ("copy-all".equals(action)) {
+                String all = terminal.screenText();
+                ClipboardManager clipboard = (ClipboardManager) getSystemService(
+                        CLIPBOARD_SERVICE);
+                if (clipboard != null) {
+                    clipboard.setPrimaryClip(ClipData.newPlainText("terminal screen", all));
+                }
+                writeEvidence("selection:copy-all scroll=" + terminal.scrollOffset()
+                        + " clipboard=" + base64(readClipboard()));
+            } else {
+                writeEvidence("selection:state scroll=" + terminal.scrollOffset()
+                        + " selected=" + base64(terminal.selectedText()));
+            }
         }
     };
 
@@ -948,6 +1002,49 @@ public final class MainActivity extends Activity {
     }
 
     /**
+     * Fills the scrollback with known rows, and ends on the two rows the touch
+     * check long-presses and drags between.
+     *
+     * <p>Fed through {@link TerminalView#feed} like a pty's bytes, so the check
+     * exercises the same wrap, history and selection path without a program's
+     * timing in between. The last two lines are deliberately ordinary words on
+     * adjacent rows: a word press has a visible start, and a handle drag has a
+     * neighbour to extend to.
+     */
+    private void startSelectionDemo() {
+        status.setText("selection demo");
+        ui.postDelayed(() -> {
+            terminal.feed("\u001b[2J");
+            for (int i = 1; i <= 40; i++) {
+                terminal.feed("SELECTION-HISTORY-" + i + " filler\r\n");
+            }
+            terminal.feed("COPY-ONE first second\r\n");
+            terminal.feed("COPY-TWO third fourth\r\n");
+            terminal.feed("SELECTION-BOTTOM end\r\n");
+            writeEvidence("selection:drawn");
+        }, 500);
+    }
+
+    private static String base64(String text) {
+        return Base64.encodeToString(text.getBytes(StandardCharsets.UTF_8),
+                Base64.NO_WRAP);
+    }
+
+    /** What the clipboard holds, for the evidence beside what was copied. */
+    private String readClipboard() {
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (clipboard == null || !clipboard.hasPrimaryClip()) {
+            return "";
+        }
+        ClipData clip = clipboard.getPrimaryClip();
+        if (clip == null || clip.getItemCount() == 0) {
+            return "";
+        }
+        CharSequence text = clip.getItemAt(0).coerceToText(this);
+        return text == null ? "" : text.toString();
+    }
+
+    /**
      * Feeds the escape sequences a program uses to move the cursor, one step at a
      * time, and records the grid and the cursor after each.
      *
@@ -1016,6 +1113,7 @@ public final class MainActivity extends Activity {
     protected void onDestroy() {
         unregisterReceiver(resizeReceiver);
         unregisterReceiver(dumpReceiver);
+        unregisterReceiver(selectionReceiver);
         int fd = master;
         master = -1;
         if (fd >= 0) {

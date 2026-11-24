@@ -1,0 +1,32 @@
+# The single source of truth for the Gradle build's versions and SDK levels.
+#
+# The Gradle-free scripts (terminal/test.sh and samples/build.sh) do not read
+# this file; they compile against the SDK the environment provides. Keep the SDK
+# levels here in step with what those scripts and the README document.
+[versions]
+# AGP 9.x is the line that runs on Gradle 9.6+, which is what Termux packages.
+# Pin it together with the wrapper in gradle/wrapper/gradle-wrapper.properties.
+agp = "9.5.2"
+
+# Nmcp stages the publications and uploads one bundle to the Central Portal.
+nmcp = "1.6.2"
+
+# Android SDK levels. CI reads compileSdk and buildTools through
+# scripts/versions.sh so the SDK it installs matches the SDK Gradle compiles
+# against. AGP 9.5.2's own default (and minimum) build tools is 36.0.0, so keep
+# buildTools at that revision even though compileSdk is 35.
+compileSdk = "35"
+minSdk = "24"
+buildTools = "36.0.0"
+
+# The Java language level for the AAR and its bytecode.
+java = "17"
+
+# The AAR version. Releases override it with -PVERSION_NAME=<tag>; Central
+# refuses to replace a version, so the tag is the source of truth there.
+projectVersion = "0.2.0"
+
+[plugins]
+android-library = { id = "com.android.library", version.ref = "agp" }
+nmcp = { id = "com.gradleup.nmcp", version.ref = "nmcp" }
+nmcp-aggregation = { id = "com.gradleup.nmcp.aggregation", version.ref = "nmcp" }

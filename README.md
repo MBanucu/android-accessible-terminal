@@ -184,9 +184,17 @@ sample build needs the network once: the screen stream is a dependency taken fro
 Maven Central (`io.github.mbanucu:screenstream`, pinned by `SCREENSTREAM_VERSION`)
 and cached under `samples/out/m2`, not a directory in this repository.
 
-The Gradle build needs an Android SDK (`ANDROID_HOME`, `ANDROID_SDK_ROOT` or
-`sdk.dir` in `local.properties`) and JDK 17. On an aarch64 host, such as Termux,
-AGP's bundled `aapt2` has no usable build, so point it at the system one:
+The Gradle build needs JDK 17 or newer and an Android SDK. On Termux, one
+command resolves `$HOME/android-sdk`, points AGP at Termux's bionic `aapt2` and
+builds the AAR:
+
+```bash
+bash scripts/termux-build.sh
+```
+
+That runs `checkBuildEnv` first, so a missing SDK, platform or `aapt2` fails with
+one actionable message instead of AGP's generic "SDK location not found". To set
+the environment yourself:
 
 ```bash
 export ANDROID_HOME=$HOME/android-sdk
@@ -195,9 +203,17 @@ export ANDROID_HOME=$HOME/android-sdk
 
 Or put `android.aapt2FromMavenOverride=$PREFIX/bin/aapt2` in
 `~/.gradle/gradle.properties` once and drop the flag. A CI machine is x86_64 and
-needs neither. `assembleRelease` writes the unsigned AAR to
-`build/outputs/aar/`; `nmcpZipAggregation` writes the signed-for-release bundle
-only when `SIGNING_KEY` is set, so a local build needs no secrets.
+needs neither. `local.properties.example` is the template for a checkout that
+finds the SDK neither way; the real `local.properties` is ignored by git.
+Versions (AGP 9.5.2, Nmcp, the project version and SDK levels) live in
+`gradle/libs.versions.toml`, and the wrapper pins Gradle 9.9.2 and its
+distribution SHA-256.
+
+`assembleRelease` writes the unsigned AAR to `build/outputs/aar/`;
+`nmcpZipAggregation` writes the release bundle (with `.asc` signatures when
+`SIGNING_KEY` is set, so a local build needs no secrets). The full Termux
+environment, cache measurements and publishing smoke test are in
+[`docs/termux-build.md`](docs/termux-build.md).
 
 The terminal view has no release, so the samples still compile its sources
 directly, which also works on an aarch64 host where Gradle's `aapt2` has no build:

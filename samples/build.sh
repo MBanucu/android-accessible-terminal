@@ -61,20 +61,38 @@ fetch_aar() {
     local dir=$here/out/m2/${group//.//}/$artifact/$version
     local jar=$dir/$artifact-$version-classes.jar
     if [ ! -f "$jar" ]; then
-        local base=https://repo1.maven.org/maven2/${group//.//}/$artifact/$version
+        # A shared CI egress IP gets 429 from repo1 often enough that a single
+        # download is not reliable. Try Google's Maven Central mirror first, then
+        # the canonical host; each URL is retried and the checksum is still from
+        # the same repository that served the AAR.
+        local bases=(
+            https://maven-central.storage-download.googleapis.com/maven2
+            https://repo1.maven.org/maven2
+        )
+        local base='' ok=''
         echo "== $artifact $version: Maven Central ==" >&2
         mkdir -p "$dir"
         # Every step is checked rather than trusted to `set -e`: a command
         # substitution runs with errexit cleared, so inside one a failed download
         # would fall through and leave this function returning a path to nothing.
-        if ! curl --fail --silent --show-error --location \
-                -o "$dir/$artifact-$version.aar" "$base/$artifact-$version.aar"; then
+        for base in "${bases[@]}"; do
+            if curl --fail --silent --show-error --location \
+                    --retry 4 --retry-delay 2 --retry-max-time 60 \
+                    -o "$dir/$artifact-$version.aar" \
+                    "$base/${group//.//}/$artifact/$version/$artifact-$version.aar"; then
+                ok=1
+                break
+            fi
             echo "$artifact $version is not at $base" >&2
+        done
+        if [ -z "$ok" ]; then
             rmdir "$dir" 2>/dev/null
             return 1
         fi
         local want got
-        if ! want=$(curl --fail --silent --show-error --location "$base/$artifact-$version.aar.sha1"); then
+        if ! want=$(curl --fail --silent --show-error --location \
+                --retry 4 --retry-delay 2 --retry-max-time 60 \
+                "$base/${group//.//}/$artifact/$version/$artifact-$version.aar.sha1"); then
             echo "$artifact-$version.aar: the repository publishes no sha1" >&2
             return 1
         fi

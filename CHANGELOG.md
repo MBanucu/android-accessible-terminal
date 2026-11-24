@@ -10,6 +10,21 @@ and this project adheres to
 
 ### Added
 
+- Touch selection and copy. A long press selects the word under the finger, or
+  the line when it lands on a blank cell; two blue handles at the range's ends
+  extend it across the grid and, dragged past the edge, into history. The
+  highlight is drawn behind the glyphs and is distinct from the caret. Rows are
+  absolute primary-buffer positions, so scrolling leaves the range on its cells,
+  a resize clamps its ends to the new grid, and a full scrollback clamps a range
+  whose row was dropped instead of naming the row that replaced it.
+  `TerminalView.selectedText()`, `hasSelection()`, `clearSelection()` and
+  `copySelection()` are the host API; copy puts exactly `Selection.text()` on the
+  clipboard. The whole-screen copy stays separate and still reads `screenText()`.
+  `SelectionTest` grows from eighteen to forty-eight checks, including word/line
+  starts, scrolling, a handle into history, resize and a trimmed history; the
+  device suite gains `selection`, a long-press/handle-drag/copy/fling/resize
+  check through accessibility gestures, with a sample page for it.
+
 - A terminal cell holds a full code point plus its combining marks, not one
   `char`. `e` followed by U+0301 is one cell, copies and is announced as the
   original base-plus-mark sequence, and does not advance the cursor; astral

@@ -286,6 +286,18 @@ final class Screen implements EscapeParser.Handler {
         return scrollback.size();
     }
 
+    /**
+     * How many history rows have been dropped from the front, ever.
+     *
+     * <p>A selection uses this to name a row by its absolute position in the
+     * primary buffer: when the 3000-row scrollback is full, the oldest row is
+     * removed and every remaining row's index falls by one. Without this the
+     * selection would stay on the same index and quietly copy a different row.
+     */
+    long historyDropped() {
+        return scrollback.dropped();
+    }
+
     /** One history row, oldest first, without its trailing blanks. */
     String historyLine(int row) {
         return scrollback.line(row);

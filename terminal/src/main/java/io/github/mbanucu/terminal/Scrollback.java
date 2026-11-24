@@ -15,6 +15,12 @@ final class Scrollback {
 
     private final List<HistoryRow> rows = new ArrayList<>();
     private final int limit;
+    /**
+     * Rows ever removed from the front, oldest first. A selection names a row by
+     * an absolute buffer position, so a trim has to move the numbering with it;
+     * otherwise a selected row would silently become the row that replaced it.
+     */
+    private long dropped;
 
     Scrollback(int limit) {
         this.limit = Math.max(0, limit);
@@ -27,11 +33,18 @@ final class Scrollback {
         rows.add(row);
         while (rows.size() > limit) {
             rows.remove(0);
+            dropped++;
         }
     }
 
     void clear() {
+        dropped += rows.size();
         rows.clear();
+    }
+
+    /** How many rows have been removed from the front of the scrollback. */
+    long dropped() {
+        return dropped;
     }
 
     void resize(int cols) {

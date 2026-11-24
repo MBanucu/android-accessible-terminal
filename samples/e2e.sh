@@ -93,7 +93,7 @@ CHECKS_RUN=0
 # test/timings.sh takes this list as the run's order and names the check in
 # progress from it; a name that is out of place makes the estimate claim the run
 # is somewhere it is not.
-CHECKS="cursor cursor-escapes colour tui tui-echo tui-caret tui-blink tui-bg tui-symbols tui-modes pty pty-flags pty-raw tty-tabs tty-scroll tty-edit tty-graphemes tty-typing tui-fast-typing tui-fast-typing-load resize rows session session-resize"
+CHECKS="cursor cursor-escapes colour tui tui-echo tui-caret tui-blink tui-bg tui-symbols tui-modes pty pty-flags pty-raw tty-tabs tty-scroll tty-edit tty-graphemes selection tty-typing tui-fast-typing tui-fast-typing-load resize rows session session-resize"
 FAIL=0
 FAIL_COUNT=0
 
@@ -693,6 +693,40 @@ await() {
 
 expect() {
     if evidence | grep -aqF -- "$1"; then ok "$2"; else bad "$2 (no '$1' in evidence)"; fi
+}
+
+# Waits for a line written after `mark`, not for a line that was already there.
+# A selection check asks the same question several times, and the previous
+# answer must not satisfy the next wait.
+await_after() { # pattern bytes seconds
+    local pattern=$1 mark=${2:-0} seconds=${3:-10}
+    timeout "$seconds" "$ADB" shell "i=0
+        while [ \$i -lt $((seconds * 10)) ]; do
+            tail -c +$((mark + 1)) '$FILES/evidence.txt' 2>/dev/null \
+                | grep -aqF -- '$pattern' && exit 0
+            sleep 0.1
+            i=\$((i + 1))
+        done
+        exit 1" >/dev/null 2>&1
+}
+
+# The evidence written since a mark, for reading the answer that wait matched.
+new_evidence() { # bytes
+    device shell "tail -c +$(( ${1:-0} + 1 )) '$FILES/evidence.txt'" 2>/dev/null
+}
+
+# A gesture through the accessibility service, not `input`: the touch path a
+# finger takes. from/to are screen coordinates, duration in milliseconds.
+gesture() { # from to milliseconds
+    device shell "content call --uri $PROBE_CONTROL --method swipe \
+        --extra pkg:s:$APP --extra from:s:$1 --extra to:s:$2 \
+        --extra duration:l:${3:-300}" 2>/dev/null
+}
+
+# Reports or copies the selection through the sample's own receiver.
+selection_action() { # state|copy|copy-all
+    device shell "am broadcast -p $APP -a $APP.action.SELECTION \
+        --es selectionAction '$1'" >/dev/null 2>&1
 }
 
 # Shortens the app's own terminal view, the way the keyboard does. The display's
@@ -1753,6 +1787,259 @@ test_grapheme_cells() {
         || bad "graphemes: the wrapped row was reported as a second line (row 6: '$row6')"
 }
 
+# --- selection and copy --------------------------------------------------------
+
+# The touch path: a long press picks a word, dragging the end handle extends the
+# range into the next row, copy puts exactly that text on the clipboard, a fling
+# scrolls with the range still on its cells, and a resize while scrolled leaves
+# it valid. The gestures are the probe's dispatchGesture, not `input`; the
+# assertions are the app's evidence and the clipboard the app reads back.
+test_selection_and_copy() {
+    launch --ez selection true --ez noIme true
+    if ! await "selection:drawn" 20; then
+        bad "selection: the demo never drew"
+        return
+    fi
+    settled_grid 16 >/dev/null || true
+
+    local tree line bounds left top right bottom cols cell_width row_height
+    local row_text word_col end_col press_x press_y hand_y
+    local row2_line row2_bounds left2 top2 right2 bottom2 row2_text word2_col
+    local foot_line foot_bounds foot_left foot_top foot_right foot_bottom
+    local hist_line hist_bounds hist_left hist_top hist_right hist_bottom
+    local hist_text filler_col hist_x hist_y
+    local target_col target_x target_y reply mark state_line selected_b64 clipboard_b64
+    local selected clipboard expected scroll before
+    tree=$(dump e2e-selection)
+    line=$(printf '%s\n' "$tree" | grep -aF 'bounds=' \
+        | grep -aF 'COPY-ONE first second' | head -1)
+    bounds=$(printf '%s\n' "$line" | sed -n \
+        's/.*bounds=\([0-9]*\),\([0-9]*\),\([0-9]*\),\([0-9]*\).*/\1 \2 \3 \4/p')
+    row2_line=$(printf '%s\n' "$tree" | grep -aF 'bounds=' \
+        | grep -aF 'COPY-TWO third fourth' | head -1)
+    row2_bounds=$(printf '%s\n' "$row2_line" | sed -n \
+        's/.*bounds=\([0-9]*\),\([0-9]*\),\([0-9]*\),\([0-9]*\).*/\1 \2 \3 \4/p')
+    foot_line=$(printf '%s\n' "$tree" | grep -aF 'bounds=' \
+        | grep -aF 'SELECTION-BOTTOM end' | head -1)
+    foot_bounds=$(printf '%s\n' "$foot_line" | sed -n \
+        's/.*bounds=\([0-9]*\),\([0-9]*\),\([0-9]*\),\([0-9]*\).*/\1 \2 \3 \4/p')
+    cols=$(evidence | grep -a '^### grid:' | tail -1 | sed 's/.*grid://; s/x.*//')
+    if [ -z "$line" ] || [ -z "$bounds" ] || [ -z "$row2_line" ] \
+            || [ -z "$row2_bounds" ] || [ -z "$foot_line" ] || [ -z "$foot_bounds" ] \
+            || [ -z "$cols" ] || [ "$cols" -le 0 ]; then
+        bad "selection: the demo rows or the grid are missing"
+        return
+    fi
+    read -r left top right bottom <<< "$bounds"
+    read -r left2 top2 right2 bottom2 <<< "$row2_bounds"
+    read -r foot_left foot_top foot_right foot_bottom <<< "$foot_bounds"
+    cell_width=$(( (right - left) / cols ))
+    row_height=$(( bottom - top ))
+    [ "$cell_width" -gt 0 ] || cell_width=1
+    [ "$row_height" -gt 0 ] || row_height=1
+    row_text=$(printf '%s\n' "$line" | sed -n 's/.* text=\(.*\) desc=.*/\1/p')
+    row2_text=$(printf '%s\n' "$row2_line" | sed -n 's/.* text=\(.*\) desc=.*/\1/p')
+    word_col=$(printf '%s' "$row_text" | awk '{ print index($0, "first") - 1 }')
+    word2_col=$(printf '%s' "$row2_text" | awk '{ print index($0, "fourth") - 1 }')
+    if [ "$word_col" -lt 0 ] || [ "$word2_col" -lt 0 ]; then
+        bad "selection: the demo's words are not in its row nodes"
+        return
+    fi
+    end_col=$((word_col + 5 - 1))
+    press_x=$((left + word_col * cell_width + cell_width / 2))
+    press_y=$((top + row_height / 2))
+    hand_y=$((top + row_height / 2))
+    target_col=$((word2_col + 6 - 1))
+    target_x=$((left2 + target_col * cell_width + cell_width / 2))
+    target_y=$((top2 + row_height / 2))
+
+    # A long press: a gesture that stays still long enough for the view's timer.
+    reply=$(gesture "$press_x,$press_y" "$((press_x + 1)),$press_y" 800)
+    if ! printf '%s\n' "$reply" | grep -aq 'code=0'; then
+        bad "selection: the long press gesture was not accepted ($reply)"
+        return
+    fi
+    mark=$(evidence_bytes)
+    selection_action state
+    if ! await_after "selection:state" "$mark" 6; then
+        bad "selection: the long press did not report a selection"
+        return
+    fi
+    state_line=$(new_evidence "$mark" | grep -a '^selection:state' | tail -1)
+    selected_b64=$(printf '%s\n' "$state_line" | sed -n 's/.* selected=//p')
+    selected=$(printf '%s' "$selected_b64" | base64 -d 2>/dev/null)
+    [ "$selected" = "first" ] \
+        && ok "selection: a long press selected the word under the finger" \
+        || bad "selection: the long press selected '$selected', not 'first'"
+
+    # Drag the end handle one row down, to the end of 'fourth'. The handle's
+    # end cell is the last letter of the first word.
+    reply=$(gesture "$((left + (end_col + 1) * cell_width)),$hand_y" \
+        "$target_x,$target_y" 500)
+    if ! printf '%s\n' "$reply" | grep -aq 'code=0'; then
+        bad "selection: the handle drag gesture was not accepted ($reply)"
+        return
+    fi
+    mark=$(evidence_bytes)
+    selection_action state
+    if ! await_after "selection:state" "$mark" 6; then
+        bad "selection: the handle drag did not report a selection"
+        return
+    fi
+    state_line=$(new_evidence "$mark" | grep -a '^selection:state' | tail -1)
+    selected_b64=$(printf '%s\n' "$state_line" | sed -n 's/.* selected=//p')
+    selected=$(printf '%s' "$selected_b64" | base64 -d 2>/dev/null)
+    expected=$(printf 'first second\nCOPY-TWO third fourth')
+    [ "$selected" = "$expected" ] \
+        && ok "selection: the end handle extended the range over both rows" \
+        || bad "selection: the dragged range was '$selected'"
+
+    # Copy: the selection action, and the clipboard the app read back.
+    mark=$(evidence_bytes)
+    selection_action copy
+    if ! await_after "selection:copy " "$mark" 6; then
+        bad "selection: copy produced no answer"
+        return
+    fi
+    state_line=$(new_evidence "$mark" | grep -a '^selection:copy ' | tail -1)
+    selected_b64=$(printf '%s\n' "$state_line" | sed -n 's/.* selected=\([^ ]*\).*/\1/p')
+    clipboard_b64=$(printf '%s\n' "$state_line" | sed -n 's/.* clipboard=\([^ ]*\).*/\1/p')
+    selected=$(printf '%s' "$selected_b64" | base64 -d 2>/dev/null)
+    clipboard=$(printf '%s' "$clipboard_b64" | base64 -d 2>/dev/null)
+    if [ "$selected" = "$expected" ] && [ "$clipboard" = "$expected" ]; then
+        ok "selection: copy put exactly the selected text on the clipboard"
+    else
+        bad "selection: copy selected '$selected' and the clipboard holds '$clipboard'"
+    fi
+
+    # The whole-screen copy the app already has stays a separate action: it
+    # reads screenText(), not the selection, and still includes scrollback.
+    mark=$(evidence_bytes)
+    selection_action copy-all
+    if ! await_after "selection:copy-all " "$mark" 6; then
+        bad "selection: copy-all produced no answer"
+        return
+    fi
+    state_line=$(new_evidence "$mark" | grep -a '^selection:copy-all ' | tail -1)
+    clipboard_b64=$(printf '%s\n' "$state_line" | sed -n 's/.* clipboard=//p')
+    clipboard=$(printf '%s' "$clipboard_b64" | base64 -d 2>/dev/null)
+    if printf '%s\n' "$clipboard" | grep -aqF 'SELECTION-HISTORY-1 ' \
+            && printf '%s\n' "$clipboard" | grep -aqF 'COPY-ONE first second' \
+            && [ "$clipboard" != "$expected" ]; then
+        ok "selection: copy-all still copies screenText() independently"
+    else
+        bad "selection: copy-all did not copy the whole screen"
+    fi
+
+    # A fling: the reader's drag path, not a node scroll.
+    local mid_x start_y end_y attempt
+    mid_x=$((left + (right - left) / 2))
+    start_y=$((top + row_height / 2))
+    end_y=$((foot_bottom - row_height / 2))
+    reply=$(gesture "$mid_x,$start_y" "$mid_x,$end_y" 80)
+    if ! printf '%s\n' "$reply" | grep -aq 'code=0'; then
+        bad "selection: the fling gesture was not accepted ($reply)"
+        return
+    fi
+    scroll=0
+    for attempt in 1 2 3 4 5 6 7 8; do
+        mark=$(evidence_bytes)
+        selection_action state
+        if await_after "selection:state" "$mark" 3; then
+            state_line=$(new_evidence "$mark" | grep -a '^selection:state' | tail -1)
+            scroll=$(printf '%s\n' "$state_line" | sed -n 's/^selection:state scroll=\([0-9]*\).*/\1/p')
+            [ "${scroll:-0}" -gt 0 ] && break
+        fi
+    done
+    if [ "${scroll:-0}" -gt 0 ]; then
+        ok "selection: the fling scrolled back $scroll rows"
+    else
+        bad "selection: the fling left scroll '${scroll:-0}'"
+        return
+    fi
+
+    # While scrolled, select a word in the top visible history row. History
+    # survives a row resize, so this is the range that must stay valid when the
+    # window shrinks underneath it.
+    tree=$(dump e2e-selection-scrolled)
+    hist_line=$(printf '%s\n' "$tree" | grep -aF 'bounds=' \
+        | grep -aF 'SELECTION-HISTORY-' | head -1)
+    hist_bounds=$(printf '%s\n' "$hist_line" | sed -n \
+        's/.*bounds=\([0-9]*\),\([0-9]*\),\([0-9]*\),\([0-9]*\).*/\1 \2 \3 \4/p')
+    hist_text=$(printf '%s\n' "$hist_line" | sed -n 's/.* text=\(.*\) desc=.*/\1/p')
+    filler_col=$(printf '%s' "$hist_text" | awk '{ print index($0, "filler") - 1 }')
+    if [ -z "$hist_line" ] || [ -z "$hist_bounds" ] || [ "$filler_col" -lt 0 ]; then
+        bad "selection: no visible history row to select while scrolled"
+        return
+    fi
+    read -r hist_left hist_top hist_right hist_bottom <<< "$hist_bounds"
+    hist_x=$((hist_left + filler_col * cell_width + cell_width / 2))
+    hist_y=$((hist_top + row_height / 2))
+    reply=$(gesture "$hist_x,$hist_y" "$((hist_x + 1)),$hist_y" 800)
+    if ! printf '%s\n' "$reply" | grep -aq 'code=0'; then
+        bad "selection: the history long press was not accepted ($reply)"
+        return
+    fi
+    mark=$(evidence_bytes)
+    selection_action state
+    if ! await_after "selection:state" "$mark" 6; then
+        bad "selection: the history long press did not report a selection"
+        return
+    fi
+    state_line=$(new_evidence "$mark" | grep -a '^selection:state' | tail -1)
+    selected_b64=$(printf '%s\n' "$state_line" | sed -n 's/.* selected=//p')
+    selected=$(printf '%s' "$selected_b64" | base64 -d 2>/dev/null)
+    [ "$selected" = "filler" ] \
+        && ok "selection: a long press in the scrollback selected its word" \
+        || bad "selection: the history long press selected '$selected'"
+
+    # Resize while scrolled: the grid follows the window, the history row stays
+    # visible, and copy still holds exactly the selected word.
+    before=$(last_grid)
+    mark=$(evidence_bytes)
+    resize_window 0.3
+    if ! grid_changed "$before" "$mark" 12; then
+        bad "selection: the view's grid did not follow the resize (was $before)"
+        return
+    fi
+    settled_grid 16 >/dev/null || true
+    mark=$(evidence_bytes)
+    selection_action state
+    if ! await_after "selection:state" "$mark" 6; then
+        bad "selection: the resize did not report a selection"
+        return
+    fi
+    state_line=$(new_evidence "$mark" | grep -a '^selection:state' | tail -1)
+    scroll=$(printf '%s\n' "$state_line" | sed -n 's/^selection:state scroll=\([0-9]*\).*/\1/p')
+    selected_b64=$(printf '%s\n' "$state_line" | sed -n 's/.* selected=//p')
+    selected=$(printf '%s' "$selected_b64" | base64 -d 2>/dev/null)
+    if [ "${scroll:-0}" -gt 0 ] && [ "$selected" = "filler" ]; then
+        ok "selection: a resize while scrolled kept the history range and offset"
+    else
+        bad "selection: after the resize scroll '${scroll:-0}' and selection '$selected'"
+    fi
+
+    tree=$(dump e2e-selection-resized)
+    if printf '%s\n' "$tree" | grep -aqF "$hist_text"; then
+        ok "selection: the selected history row is still visible after the resize"
+    else
+        bad "selection: the history row left the view when it shrank"
+    fi
+
+    mark=$(evidence_bytes)
+    selection_action copy
+    if await_after "selection:copy " "$mark" 6; then
+        state_line=$(new_evidence "$mark" | grep -a '^selection:copy ' | tail -1)
+        clipboard_b64=$(printf '%s\n' "$state_line" | sed -n 's/.* clipboard=\([^ ]*\).*/\1/p')
+        clipboard=$(printf '%s' "$clipboard_b64" | base64 -d 2>/dev/null)
+        [ "$clipboard" = "filler" ] \
+            && ok "selection: copy still holds the history word after the resize" \
+            || bad "selection: the post-resize clipboard holds '$clipboard'"
+    else
+        bad "selection: copy after the resize produced no answer"
+    fi
+}
+
 # --- typing under load ---------------------------------------------------------
 
 # One ACTION_SET_TEXT and Enter, with no retry: this check counts what the
@@ -2017,6 +2304,7 @@ check tty-tabs test_tab_stops
 check tty-scroll test_scroll_region
 check tty-edit test_insert_and_delete
 check tty-graphemes test_grapheme_cells
+check selection test_selection_and_copy
 check tty-typing test_fast_typing_keeps_every_letter
 check tui-fast-typing test_curses_fast_typing
 check tui-fast-typing-load test_curses_fast_typing_under_load

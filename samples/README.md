@@ -153,6 +153,7 @@ Each takes an extra on the launch intent:
 | `--ez scroll true` | rows 2–3 as a `DECSTBM` region, scrolled once; rows 1 and 4 stay put |
 | `--ez edit true` | `IL`, `DL`, `ICH` and `DCH`, with all four results on screen together |
 | `--ez graphemes true` | `e` + U+0301 and U+1F600 at fixed columns, so each cluster's cell width shows in the row text |
+| `--ez selection true` | forty history rows and two known `COPY-*` lines, for the long-press, handle-drag, copy, fling and resize check; the exported `SELECTION` broadcast reports or copies the selection |
 | `--ez typing true` | every line it reads, numbered and measured, for the fast-typing check |
 | `--ez tuiTyping true` | a curses form that logs each submitted line with its length and counts every key it consumed |
 | `--ez tuiTypingLoad true` | the same form, repainting ten times a second, for typing that overlaps output |

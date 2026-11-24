@@ -330,8 +330,8 @@ public final class TerminalView extends View {
                 }
             }
             for (int col = 0; col < screen.cols(); col++) {
-                char glyph = viewport.cell(row, col);
-                if (glyph == 0 || glyph == ' ') {
+                String glyph = viewport.cell(row, col);
+                if (Cell.isContinuation(glyph) || Cell.isBlank(glyph)) {
                     continue;
                 }
                 int attributes = viewport.attribute(row, col);
@@ -342,9 +342,9 @@ public final class TerminalView extends View {
                 // the default.
                 int colour = textColour(attributes, viewport.foreground(row, col),
                         viewport.background(row, col));
-                int width = Width.of(glyph);
+                int width = Cell.width(glyph);
                 float drawnWidth = width * cellWidth;
-                String text = String.valueOf(glyph);
+                String text = glyph;
                 paint.setColor(colour);
                 paint.setTypeface(CellAttributes.has(attributes, CellAttributes.ITALIC)
                         ? italicTypeface() : typeface);
@@ -415,11 +415,11 @@ public final class TerminalView extends View {
         block.setColor(colour);
         canvas.drawRect(col * cellWidth, rowBaseline + paint.ascent(),
                 (col + 1) * cellWidth, rowBaseline + paint.descent(), block);
-        char under = viewport.cell(row, col);
-        if (under != 0 && under != ' ') {
+        String under = viewport.cell(row, col);
+        if (!Cell.isContinuation(under) && !Cell.isBlank(under)) {
             Paint glyph = new Paint(paint);
             glyph.setColor(WINDOW_BACKGROUND);
-            canvas.drawText(String.valueOf(under), col * cellWidth, rowBaseline, glyph);
+            canvas.drawText(under, col * cellWidth, rowBaseline, glyph);
         }
     }
 

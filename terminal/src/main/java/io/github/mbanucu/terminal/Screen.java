@@ -27,8 +27,8 @@ final class Screen implements EscapeParser.Handler {
     private ReplySink replySink;
     private final CsiCommands commands = new CsiCommands(this);
     private final Modes modes = new Modes();
-    private char[][] main;
-    private char[][] alt;
+    private String[][] main;
+    private String[][] alt;
     /** Whether each row of the primary buffer continues on the next row. */
     private boolean[] mainWrapped;
     private boolean[] altWrapped;
@@ -44,7 +44,7 @@ final class Screen implements EscapeParser.Handler {
     private int[][] mainAttr;
     private int[][] altAttr;
     /** The buffer being drawn into: {@link #main} or {@link #alt}. */
-    private char[][] cells;
+    private String[][] cells;
     /** The foregrounds of the buffer being drawn into. */
     private int[][] colours;
     /** The backgrounds of the buffer being drawn into. */
@@ -52,8 +52,11 @@ final class Screen implements EscapeParser.Handler {
     /** The SGR attributes of the buffer being drawn into. */
     private int[][] attributes;
     private final Sgr sgr = new Sgr();
-    /** The last character written, for REP: a run of spaces is one REP. */
-    private char lastChar = ' ';
+    /**
+     * The last base character written, for REP: a run of spaces is one REP.
+     * Combining marks do not replace it - they are not graphic characters.
+     */
+    private String lastCell = Cell.BLANK;
     private int cols;
     private int rows;
     private int cursorRow;
@@ -133,13 +136,22 @@ final class Screen implements EscapeParser.Handler {
         wrapPending = false;
     }
 
-    private static char[][] copy(char[][] from, int fromCols, int fromRows, int toCols, int toRows) {
-        char[][] to = new char[toRows][toCols];
-        for (char[] row : to) {
-            Arrays.fill(row, ' ');
+    private static String[][] copy(String[][] from, int fromCols, int fromRows, int toCols,
+            int toRows) {
+        String[][] to = new String[toRows][toCols];
+        for (String[] row : to) {
+            Arrays.fill(row, Cell.BLANK);
         }
-        for (int row = 0; row < Math.min(fromRows, toRows); row++) {
-            System.arraycopy(from[row], 0, to[row], 0, Math.min(fromCols, toCols));
+        int keepCols = Math.min(fromCols, toCols);
+        int keepRows = Math.min(fromRows, toRows);
+        for (int row = 0; row < keepRows; row++) {
+            System.arraycopy(from[row], 0, to[row], 0, keepCols);
+            // Narrowing can cut a wide glyph in half. Its base cannot fill the
+            // column after it, so drop it rather than draw over the edge.
+            if (keepCols == toCols && toCols < fromCols
+                    && Cell.width(to[row][toCols - 1]) == 2) {
+                to[row][toCols - 1] = Cell.BLANK;
+            }
         }
         return to;
     }
@@ -176,25 +188,25 @@ final class Screen implements EscapeParser.Handler {
         if (row < 0 || row >= rows) {
             return "";
         }
-        char[] chars = cells[row];
+        String[] rowCells = cells[row];
         int end = cols;
-        while (end > 0 && (chars[end - 1] == ' ' || chars[end - 1] == 0)) {
+        while (end > 0 && Cell.isBlank(rowCells[end - 1])) {
             end--;
         }
         StringBuilder text = new StringBuilder(end);
         for (int col = 0; col < end; col++) {
             // A continuation cell is half of a wide glyph, not a character.
-            if (chars[col] != 0) {
-                text.append(chars[col]);
+            if (!Cell.isContinuation(rowCells[col])) {
+                text.append(rowCells[col]);
             }
         }
         return text.toString();
     }
 
-    /** One cell's character: 0 for the continuation of a wide glyph. */
-    char cell(int row, int col) {
+    /** One cell's text: a base code point and its marks, or the continuation sentinel. */
+    String cell(int row, int col) {
         if (row < 0 || row >= rows || col < 0 || col >= cols) {
-            return ' ';
+            return Cell.BLANK;
         }
         return cells[row][col];
     }
@@ -215,8 +227,8 @@ final class Screen implements EscapeParser.Handler {
         return colours[row][col];
     }
 
-    /** One history cell's character: 0 for the continuation of a wide glyph. */
-    char historyCell(int row, int col) {
+    /** One history cell's text: a cluster, or the continuation sentinel. */
+    String historyCell(int row, int col) {
         return scrollback.cell(row, col);
     }
 
@@ -346,8 +358,8 @@ final class Screen implements EscapeParser.Handler {
     }
 
     @Override
-    public void text(char c) {
-        put(c);
+    public void text(int codePoint) {
+        put(codePoint);
     }
 
     @Override
@@ -506,10 +518,10 @@ final class Screen implements EscapeParser.Handler {
 
     // --- drawing ---------------------------------------------------------------
 
-    private char[][] blank() {
-        char[][] fresh = new char[rows][cols];
-        for (char[] row : fresh) {
-            Arrays.fill(row, ' ');
+    private String[][] blank() {
+        String[][] fresh = new String[rows][cols];
+        for (String[] row : fresh) {
+            Arrays.fill(row, Cell.BLANK);
         }
         return fresh;
     }
@@ -597,7 +609,13 @@ final class Screen implements EscapeParser.Handler {
         wrapPending = false;
     }
 
-    private void put(char c) {
+    private void put(int codePoint) {
+        if (Cell.isCombining(codePoint)) {
+            // A mark belongs to the cell before it, whichever half of a wide
+            // glyph the cursor happens to sit on. It takes no column.
+            attachMark(codePoint);
+            return;
+        }
         if (wrapPending) {
             // The row is full and the next glyph continues it: remember that so
             // copy joins the two halves instead of inventing a line break.
@@ -606,7 +624,7 @@ final class Screen implements EscapeParser.Handler {
             newline();
             wrapPending = false;
         }
-        int width = Width.of(c);
+        int width = Width.of(codePoint);
         if (width == 2 && cursorCol == cols - 1) {
             // A wide glyph cannot straddle the edge: it moves to the next row
             // whole, and the row it leaves is a wrapped one.
@@ -614,25 +632,64 @@ final class Screen implements EscapeParser.Handler {
             cursorCol = 0;
             newline();
         }
-        cells[cursorRow][cursorCol] = c;
-        // Bold is applied here, not when the code is read: SGR 22 turns it off
-        // for what follows and leaves what is already on screen bright.
-        colours[cursorRow][cursorCol] = sgr.drawnForeground();
-        backgrounds[cursorRow][cursorCol] = sgr.background();
-        attributes[cursorRow][cursorCol] = sgr.attributes();
-        if (width == 2) {
-            // The second cell is a continuation marker, not text; it keeps the
-            // same look so a background fills both cells.
-            cells[cursorRow][cursorCol + 1] = 0;
-            colours[cursorRow][cursorCol + 1] = sgr.drawnForeground();
-            backgrounds[cursorRow][cursorCol + 1] = sgr.background();
-            attributes[cursorRow][cursorCol + 1] = sgr.attributes();
-        }
-        lastChar = c;
+        writeCell(cursorRow, cursorCol, Cell.of(codePoint), width);
+        lastCell = cells[cursorRow][cursorCol];
         if (cursorCol + width >= cols) {
             wrapPending = true;
         } else {
             cursorCol += width;
+        }
+    }
+
+    /** Writes one cell and, for a wide glyph, its continuation half. */
+    private void writeCell(int row, int col, String text, int width) {
+        cells[row][col] = text;
+        // Bold is applied here, not when the code is read: SGR 22 turns it off
+        // for what follows and leaves what is already on screen bright.
+        colours[row][col] = sgr.drawnForeground();
+        backgrounds[row][col] = sgr.background();
+        attributes[row][col] = sgr.attributes();
+        if (width == 2 && col + 1 < cols) {
+            // The second cell is a continuation marker, not text; it keeps the
+            // same look so a background fills both cells.
+            cells[row][col + 1] = Cell.CONTINUATION;
+            colours[row][col + 1] = sgr.drawnForeground();
+            backgrounds[row][col + 1] = sgr.background();
+            attributes[row][col + 1] = sgr.attributes();
+        }
+    }
+
+    /**
+     * Appends a combining mark to the cell before the cursor.
+     *
+     * <p>At the start of a wrapped row the cell before the cursor is the last
+     * cell of the row above, so a mark that arrives after a wrap still finds its
+     * base. A mark with nothing before it gets a cell of its own rather than
+     * disappearing; that is the one case where a mark advances the cursor.
+     */
+    private void attachMark(int mark) {
+        int row = cursorRow;
+        // After a glyph filled the last column the cursor waits on that column
+        // instead of moving past it, so the cell just written is the cursor's
+        // own cell; otherwise it is the one before.
+        int col = wrapPending ? cursorCol : cursorCol - 1;
+        if (col < 0 && row > 0 && wrapped[row - 1]) {
+            row--;
+            col = cols - 1;
+        }
+        if (col >= 0 && Cell.isContinuation(cells[row][col])) {
+            col--;
+        }
+        if (col >= 0 && !Cell.isContinuation(cells[row][col])) {
+            cells[row][col] = Cell.withMark(cells[row][col], mark);
+            return;
+        }
+        writeCell(cursorRow, cursorCol, Cell.of(mark), 1);
+        lastCell = cells[cursorRow][cursorCol];
+        if (cursorCol + 1 >= cols) {
+            wrapPending = true;
+        } else {
+            cursorCol++;
         }
     }
 
@@ -642,10 +699,12 @@ final class Screen implements EscapeParser.Handler {
      * <p>Not an optimisation to skip: a terminal is told to fill a cell with a
      * background by writing a space in that background, and xterm-256color
      * advertises REP, so ncurses writes a box's fill as one space and a REP.
+     * The base character repeats; combining marks attached to it do not.
      */
     void repeat(int count) {
+        int base = Cell.codePoint(lastCell);
         for (int i = 0; i < count; i++) {
-            put(lastChar);
+            put(base);
         }
     }
 
@@ -673,7 +732,7 @@ final class Screen implements EscapeParser.Handler {
                 System.arraycopy(attributes[row + 1], 0, attributes[row], 0, cols);
                 wrapped[row] = wrapped[row + 1];
             }
-            Arrays.fill(cells[scrollBottom], ' ');
+            Arrays.fill(cells[scrollBottom], Cell.BLANK);
             Arrays.fill(colours[scrollBottom], 0);
             Arrays.fill(backgrounds[scrollBottom], sgr.background());
             Arrays.fill(attributes[scrollBottom], 0);
@@ -696,7 +755,7 @@ final class Screen implements EscapeParser.Handler {
                 System.arraycopy(attributes[row - 1], 0, attributes[row], 0, cols);
                 wrapped[row] = wrapped[row - 1];
             }
-            Arrays.fill(cells[scrollTop], ' ');
+            Arrays.fill(cells[scrollTop], Cell.BLANK);
             Arrays.fill(colours[scrollTop], 0);
             Arrays.fill(backgrounds[scrollTop], sgr.background());
             Arrays.fill(attributes[scrollTop], 0);
@@ -718,8 +777,8 @@ final class Screen implements EscapeParser.Handler {
             return;
         }
         if (mode == 2) {
-            for (char[] row : cells) {
-                Arrays.fill(row, ' ');
+            for (String[] row : cells) {
+                Arrays.fill(row, Cell.BLANK);
             }
             for (int[] row : colours) {
                 Arrays.fill(row, 0);
@@ -735,24 +794,24 @@ final class Screen implements EscapeParser.Handler {
         }
         if (mode == 1) {
             for (int row = 0; row < cursorRow; row++) {
-                Arrays.fill(cells[row], ' ');
+                Arrays.fill(cells[row], Cell.BLANK);
                 Arrays.fill(colours[row], 0);
                 Arrays.fill(backgrounds[row], sgr.background());
                 Arrays.fill(attributes[row], 0);
                 wrapped[row] = false;
             }
-            Arrays.fill(cells[cursorRow], 0, Math.min(cols, cursorCol + 1), ' ');
+            Arrays.fill(cells[cursorRow], 0, Math.min(cols, cursorCol + 1), Cell.BLANK);
             Arrays.fill(colours[cursorRow], 0, Math.min(cols, cursorCol + 1), 0);
             Arrays.fill(backgrounds[cursorRow], 0, Math.min(cols, cursorCol + 1), sgr.background());
             Arrays.fill(attributes[cursorRow], 0, Math.min(cols, cursorCol + 1), 0);
             return;
         }
-        Arrays.fill(cells[cursorRow], cursorCol, cols, ' ');
+        Arrays.fill(cells[cursorRow], cursorCol, cols, Cell.BLANK);
         Arrays.fill(colours[cursorRow], cursorCol, cols, 0);
         Arrays.fill(backgrounds[cursorRow], cursorCol, cols, sgr.background());
         Arrays.fill(attributes[cursorRow], cursorCol, cols, 0);
         for (int row = cursorRow + 1; row < rows; row++) {
-            Arrays.fill(cells[row], ' ');
+            Arrays.fill(cells[row], Cell.BLANK);
             Arrays.fill(colours[row], 0);
             Arrays.fill(backgrounds[row], sgr.background());
             Arrays.fill(attributes[row], 0);
@@ -762,18 +821,18 @@ final class Screen implements EscapeParser.Handler {
 
     void eraseLine(int mode) {
         if (mode == 2) {
-            Arrays.fill(cells[cursorRow], ' ');
+            Arrays.fill(cells[cursorRow], Cell.BLANK);
             Arrays.fill(colours[cursorRow], 0);
             Arrays.fill(backgrounds[cursorRow], sgr.background());
             Arrays.fill(attributes[cursorRow], 0);
             wrapped[cursorRow] = false;
         } else if (mode == 1) {
-            Arrays.fill(cells[cursorRow], 0, Math.min(cols, cursorCol + 1), ' ');
+            Arrays.fill(cells[cursorRow], 0, Math.min(cols, cursorCol + 1), Cell.BLANK);
             Arrays.fill(colours[cursorRow], 0, Math.min(cols, cursorCol + 1), 0);
             Arrays.fill(backgrounds[cursorRow], 0, Math.min(cols, cursorCol + 1), sgr.background());
             Arrays.fill(attributes[cursorRow], 0, Math.min(cols, cursorCol + 1), 0);
         } else {
-            Arrays.fill(cells[cursorRow], cursorCol, cols, ' ');
+            Arrays.fill(cells[cursorRow], cursorCol, cols, Cell.BLANK);
             Arrays.fill(colours[cursorRow], cursorCol, cols, 0);
             Arrays.fill(backgrounds[cursorRow], cursorCol, cols, sgr.background());
             Arrays.fill(attributes[cursorRow], cursorCol, cols, 0);
@@ -782,29 +841,62 @@ final class Screen implements EscapeParser.Handler {
 
     void eraseChars(int count) {
         int end = Math.min(cols, cursorCol + count);
-        Arrays.fill(cells[cursorRow], cursorCol, end, ' ');
+        Arrays.fill(cells[cursorRow], cursorCol, end, Cell.BLANK);
         Arrays.fill(colours[cursorRow], cursorCol, end, 0);
         Arrays.fill(backgrounds[cursorRow], cursorCol, end, sgr.background());
         Arrays.fill(attributes[cursorRow], cursorCol, end, 0);
+        normalizeRow(cursorRow);
+    }
+
+    /**
+     * Drops half a wide glyph left by an erase or a shift.
+     *
+     * <p>A cell is one grapheme, but a wide glyph is two cells. An operation
+     * that names a column can land between the halves; the pair is then no
+     * longer a glyph, so both halves become blank instead of one being drawn
+     * across the cell after it.
+     */
+    private void normalizeRow(int row) {
+        String[] line = cells[row];
+        for (int col = 0; col < cols; col++) {
+            if (Cell.isContinuation(line[col])) {
+                if (col == 0 || Cell.width(line[col - 1]) != 2) {
+                    line[col] = Cell.BLANK;
+                    colours[row][col] = 0;
+                    backgrounds[row][col] = sgr.background();
+                    attributes[row][col] = 0;
+                }
+            } else if (Cell.width(line[col]) == 2) {
+                if (col + 1 < cols && Cell.isContinuation(line[col + 1])) {
+                    col++;
+                } else {
+                    line[col] = Cell.BLANK;
+                    colours[row][col] = 0;
+                    backgrounds[row][col] = sgr.background();
+                    attributes[row][col] = 0;
+                }
+            }
+        }
     }
 
     void deleteChars(int count) {
-        char[] row = cells[cursorRow];
+        String[] row = cells[cursorRow];
         int end = Math.min(cols, cursorCol + count);
         System.arraycopy(row, end, row, cursorCol, cols - end);
         System.arraycopy(colours[cursorRow], end, colours[cursorRow], cursorCol, cols - end);
         System.arraycopy(backgrounds[cursorRow], end, backgrounds[cursorRow], cursorCol, cols - end);
         System.arraycopy(attributes[cursorRow], end, attributes[cursorRow], cursorCol, cols - end);
-        Arrays.fill(row, cols - Math.min(count, cols - cursorCol), cols, ' ');
+        Arrays.fill(row, cols - Math.min(count, cols - cursorCol), cols, Cell.BLANK);
         Arrays.fill(colours[cursorRow], cols - Math.min(count, cols - cursorCol), cols, 0);
         Arrays.fill(backgrounds[cursorRow], cols - Math.min(count, cols - cursorCol), cols,
                 sgr.background());
         Arrays.fill(attributes[cursorRow], cols - Math.min(count, cols - cursorCol), cols,
                 0);
+        normalizeRow(cursorRow);
     }
 
     void insertChars(int count) {
-        char[] row = cells[cursorRow];
+        String[] row = cells[cursorRow];
         int shift = Math.min(count, cols - cursorCol);
         System.arraycopy(row, cursorCol, row, cursorCol + shift, cols - cursorCol - shift);
         System.arraycopy(colours[cursorRow], cursorCol, colours[cursorRow],
@@ -813,10 +905,11 @@ final class Screen implements EscapeParser.Handler {
                 cursorCol + shift, cols - cursorCol - shift);
         System.arraycopy(attributes[cursorRow], cursorCol, attributes[cursorRow],
                 cursorCol + shift, cols - cursorCol - shift);
-        Arrays.fill(row, cursorCol, cursorCol + shift, ' ');
+        Arrays.fill(row, cursorCol, cursorCol + shift, Cell.BLANK);
         Arrays.fill(colours[cursorRow], cursorCol, cursorCol + shift, 0);
         Arrays.fill(backgrounds[cursorRow], cursorCol, cursorCol + shift, sgr.background());
         Arrays.fill(attributes[cursorRow], cursorCol, cursorCol + shift, 0);
+        normalizeRow(cursorRow);
     }
 
     void insertLines(int count) {
@@ -828,7 +921,7 @@ final class Screen implements EscapeParser.Handler {
                 System.arraycopy(attributes[row - 1], 0, attributes[row], 0, cols);
                 wrapped[row] = wrapped[row - 1];
             }
-            Arrays.fill(cells[cursorRow], ' ');
+            Arrays.fill(cells[cursorRow], Cell.BLANK);
             Arrays.fill(colours[cursorRow], 0);
             Arrays.fill(backgrounds[cursorRow], sgr.background());
             Arrays.fill(attributes[cursorRow], 0);
@@ -845,7 +938,7 @@ final class Screen implements EscapeParser.Handler {
                 System.arraycopy(attributes[row + 1], 0, attributes[row], 0, cols);
                 wrapped[row] = wrapped[row + 1];
             }
-            Arrays.fill(cells[scrollBottom], ' ');
+            Arrays.fill(cells[scrollBottom], Cell.BLANK);
             Arrays.fill(colours[scrollBottom], 0);
             Arrays.fill(backgrounds[scrollBottom], sgr.background());
             Arrays.fill(attributes[scrollBottom], 0);
@@ -868,8 +961,8 @@ final class Screen implements EscapeParser.Handler {
             backgrounds = altBg;
             attributes = altAttr;
             wrapped = altWrapped;
-            for (char[] row : alt) {
-                Arrays.fill(row, ' ');
+            for (String[] row : alt) {
+                Arrays.fill(row, Cell.BLANK);
             }
             for (int[] row : altFg) {
                 Arrays.fill(row, 0);

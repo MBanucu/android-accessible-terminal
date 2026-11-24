@@ -75,17 +75,34 @@ final class Selection {
         int lastCol = lastCol();
         StringBuilder copied = new StringBuilder();
         for (int row = firstRow; row <= lastRow; row++) {
-            String line = viewport.line(row);
-            int from = row == firstRow ? Math.min(firstCol, line.length()) : 0;
-            int to = row == lastRow ? Math.min(lastCol + 1, line.length()) : line.length();
-            if (to > from) {
-                copied.append(line, from, to);
+            int length = rowLength(row);
+            int from = row == firstRow ? Math.min(firstCol, length) : 0;
+            int to = row == lastRow ? Math.min(lastCol + 1, length) : length;
+            // Starting on the second half of a wide glyph selects the whole
+            // glyph, the way a caret that lands there still names its base.
+            if (from > 0 && from < length && Cell.isContinuation(viewport.cell(row, from))) {
+                from--;
+            }
+            for (int col = from; col < to; col++) {
+                String cell = viewport.cell(row, col);
+                if (!Cell.isContinuation(cell)) {
+                    copied.append(cell);
+                }
             }
             if (row < lastRow && !viewport.wrapped(row)) {
                 copied.append('\n');
             }
         }
         return copied.toString();
+    }
+
+    /** How many columns of a row hold text: the last non-blank cell plus one. */
+    private int rowLength(int row) {
+        int end = screen.cols();
+        while (end > 0 && Cell.isBlank(viewport.cell(row, end - 1))) {
+            end--;
+        }
+        return end;
     }
 
     private int firstRow() {

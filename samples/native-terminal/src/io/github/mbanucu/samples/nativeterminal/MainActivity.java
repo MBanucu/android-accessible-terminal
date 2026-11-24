@@ -194,6 +194,8 @@ public final class MainActivity extends Activity {
                 && getIntent().getBooleanExtra("scroll", false);
         boolean edit = getIntent() != null
                 && getIntent().getBooleanExtra("edit", false);
+        boolean graphemes = getIntent() != null
+                && getIntent().getBooleanExtra("graphemes", false);
         boolean typing = getIntent() != null
                 && getIntent().getBooleanExtra("typing", false);
         boolean tuiTyping = getIntent() != null
@@ -249,6 +251,8 @@ public final class MainActivity extends Activity {
             startTui("tty-scroll.py", "tty-scroll");
         } else if (edit) {
             startTui("tty-edit.py", "tty-edit");
+        } else if (graphemes) {
+            startTui("tty-graphemes.py", "tty-graphemes");
         } else if (typing) {
             startTui("tty-typing.py", "tty-typing");
         } else if (tuiTypingLoad) {

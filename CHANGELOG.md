@@ -10,6 +10,20 @@ and this project adheres to
 
 ### Added
 
+- A terminal cell holds a full code point plus its combining marks, not one
+  `char`. `e` followed by U+0301 is one cell, copies and is announced as the
+  original base-plus-mark sequence, and does not advance the cursor; astral
+  characters such as emoji are decoded from their surrogate pair by
+  `EscapeParser`, take the width `Width` assigns them, and are drawn once across
+  both cells. `Cell` is the shared cell representation: `Screen`, `HistoryRow`,
+  `Selection`, `Viewport`, the accessibility row text and `TerminalView` all read
+  it, so wrapping, history, resize, erase, insert/delete and selection treat a
+  cluster as one cell. A wide glyph that no longer fits at the right edge or
+  after a narrowing resize is never split. `GraphemeTest` adds sixty JVM checks
+  for accents, emoji, split surrogate feeds, cursors, erase, wrapping, history,
+  resize and copied text, and the device suite gains `tty-graphemes` with a
+  sample page for the same cells.
+
 - Mouse input and bracketed paste reach a program. `MouseEncoder` sends press,
   release, motion and wheel reports for DEC tracking modes 1000/1002/1003 in SGR
   (1006) and urxvt (1015), with xterm's three-byte form as the default when a

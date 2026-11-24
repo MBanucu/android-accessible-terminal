@@ -108,8 +108,8 @@ final class Viewport {
         return screen.background(history - screen.historyRows(), col);
     }
 
-    /** One visible cell's character: 0 for the continuation of a wide glyph. */
-    char cell(int row, int col) {
+    /** One visible cell's text: a cluster, or the continuation sentinel. */
+    String cell(int row, int col) {
         if (screen.isAlternate()) {
             return screen.cell(row, col);
         }

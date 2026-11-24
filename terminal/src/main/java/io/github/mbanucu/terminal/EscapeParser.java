@@ -12,7 +12,8 @@ final class EscapeParser {
 
     /** What a parsed chunk means to the screen. */
     interface Handler {
-        void text(char c);
+        /** One code point: an astral character arrives as one value, not two chars. */
+        void text(int codePoint);
 
         void carriageReturn();
 
@@ -38,6 +39,7 @@ final class EscapeParser {
     void feed(String chunk) {
         pending.append(chunk);
         int index = 0;
+        decode:
         while (index < pending.length()) {
             char c = pending.charAt(index);
             if (c == 0x1b) {
@@ -63,6 +65,19 @@ final class EscapeParser {
                     break;
                 default:
                     if (c >= 0x20 && c != 0x7f) {
+                        if (Character.isHighSurrogate(c)) {
+                            if (index + 1 >= pending.length()) {
+                                // The low half is in the next chunk: keep both
+                                // halves together rather than draw a replacement.
+                                break decode;
+                            }
+                            char low = pending.charAt(index + 1);
+                            if (Character.isLowSurrogate(low)) {
+                                handler.text(Character.toCodePoint(c, low));
+                                index += 2;
+                                continue;
+                            }
+                        }
                         handler.text(c);
                     }
                     break;

@@ -318,10 +318,11 @@ with no sink the screen stays quiet.
 `bash terminal/test.sh` compiles the grid, its history rows and colour tables,
 and the viewport with `src/test`, then runs them on the JVM. It discovers the
 sources and every `*Test.java` instead of naming them, and needs no device, no
-Gradle, no Android SDK and no test framework — only a `javac`. Seventeen suites
-(423 checks) cover cursor addressing, erases, insert/delete, scroll regions,
-scrollback, selection, SGR colour and attributes, the caret, wide characters, key
-encoding, mouse encoding, paste wrapping, input modes and query replies.
+Gradle, no Android SDK and no test framework — only a `javac`. Eighteen suites
+(483 checks) cover cursor addressing, erases, insert/delete, scroll regions,
+scrollback, selection, SGR colour and attributes, the caret, wide characters,
+combining marks and emoji cells, key encoding, mouse encoding, paste wrapping,
+input modes and query replies.
 
 `TerminalView` and `TerminalAccessibility` import `android.*` and need
 `android.jar`; the view is covered on a device by the sample suite.
@@ -350,8 +351,11 @@ accessibility settings back afterwards.
   alternate screen is the program's own), a cell-range selection model that
   copies hard breaks and wrapped rows correctly, and mouse and paste input for a
   program that asks. It has no long-press selection handles or touch selection
-  UI. Width-2 CJK glyphs take two cells and wrap whole; combining marks and emoji
-  do not. Enough to draw a TUI and read it; not enough to be someone's daily
+  UI. A cell holds a base code point and its combining marks, so `e` + U+0301 is
+  one cell and copies as the original two code points; a wide or emoji glyph
+  takes the two cells the width table gives it and wraps whole at the right
+  edge. ZWJ emoji sequences and variation selectors are not joined into one
+  cluster yet. Enough to draw a TUI and read it; not enough to be someone's daily
   terminal without more work.
 - **Not a transport.** An app-owned `forkpty` pty and Termux's `RUN_COMMAND`
   session are both in the sample, and both are the caller's business. The size

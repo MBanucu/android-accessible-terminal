@@ -93,7 +93,7 @@ CHECKS_RUN=0
 # test/timings.sh takes this list as the run's order and names the check in
 # progress from it; a name that is out of place makes the estimate claim the run
 # is somewhere it is not.
-CHECKS="cursor cursor-escapes colour tui tui-echo tui-caret tui-blink tui-bg tui-symbols tui-modes pty pty-flags pty-raw tty-tabs tty-scroll tty-edit tty-typing tui-fast-typing tui-fast-typing-load resize rows session session-resize"
+CHECKS="cursor cursor-escapes colour tui tui-echo tui-caret tui-blink tui-bg tui-symbols tui-modes pty pty-flags pty-raw tty-tabs tty-scroll tty-edit tty-graphemes tty-typing tui-fast-typing tui-fast-typing-load resize rows session session-resize"
 FAIL=0
 FAIL_COUNT=0
 
@@ -1714,6 +1714,45 @@ test_insert_and_delete() {
         || bad "edit: DCH did not shift the rest of the row (got '$(printf '%s\n' "$screen" | sed -n '17p')')"
 }
 
+# --- combining marks and emoji -------------------------------------------------
+
+# `assets/tty-graphemes.py` puts each cluster at column 1 and END at a fixed
+# column, so the row text shows how many cells the cluster took. A combining
+# mark that took a column of its own would put END at the wrong position, and a
+# surrogate pair would leave a replacement character instead of one glyph.
+#
+# `screenText()` joins a row the view marked wrapped, so the emoji written at
+# column 80 and its END are one logical line (row 5 here), and row 6 is blank.
+# A glyph cut at the edge would instead leave 79 spaces before the emoji on row
+# 5, which the exact match below rejects.
+test_grapheme_cells() {
+    launch --ez graphemes true
+    if ! await "TTY-GRAPHEMES" 30; then
+        bad "graphemes: the program never drew"
+        return
+    fi
+    local screen cluster emoji row3 row4 row5 row6
+    cluster=$'e\u0301'
+    emoji=$'\U0001F600'
+    screen=$(fresh_screen)
+    row3=$(printf '%s\n' "$screen" | sed -n '3p')
+    row4=$(printf '%s\n' "$screen" | sed -n '4p')
+    row5=$(printf '%s\n' "$screen" | sed -n '5p')
+    row6=$(printf '%s\n' "$screen" | sed -n '6p')
+    [ "$row3" = "$cluster   END" ] \
+        && ok "graphemes: e plus U+0301 took one cell" \
+        || bad "graphemes: the combining mark took a column (row 3: '$row3')"
+    [ "$row4" = "$emoji  END" ] \
+        && ok "graphemes: the emoji took two cells" \
+        || bad "graphemes: the emoji's width is wrong (row 4: '$row4')"
+    [ "$row5" = "$emoji  END" ] \
+        && ok "graphemes: an emoji on column 80 wrapped whole to the next row" \
+        || bad "graphemes: column 80 split or indented the glyph (row 5: '$row5')"
+    [ -z "$row6" ] \
+        && ok "graphemes: the wrapped emoji row is joined by the wrapped flag" \
+        || bad "graphemes: the wrapped row was reported as a second line (row 6: '$row6')"
+}
+
 # --- typing under load ---------------------------------------------------------
 
 # One ACTION_SET_TEXT and Enter, with no retry: this check counts what the
@@ -1977,6 +2016,7 @@ check pty-raw test_pty_raw_mode_reads_a_key
 check tty-tabs test_tab_stops
 check tty-scroll test_scroll_region
 check tty-edit test_insert_and_delete
+check tty-graphemes test_grapheme_cells
 check tty-typing test_fast_typing_keeps_every_letter
 check tui-fast-typing test_curses_fast_typing
 check tui-fast-typing-load test_curses_fast_typing_under_load

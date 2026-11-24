@@ -13,6 +13,16 @@ permissions:
   contents: read
 
 jobs:
+  wrapper:
+    name: Gradle wrapper
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # Checks gradle-wrapper.jar against Gradle's published checksums;
+      # gradle-wrapper.properties pins distributionSha256Sum as well, so neither
+      # half of the wrapper can change silently.
+      - uses: gradle/actions/wrapper-validation@v4
+
   jvm-suite:
     name: terminal JVM suite
     runs-on: ubuntu-24.04
@@ -42,13 +52,80 @@ jobs:
         run: |
           sdk="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           manager=$(command -v sdkmanager || echo "$sdk/cmdline-tools/latest/bin/sdkmanager")
+          api=$(bash scripts/versions.sh compileSdk)
+          build_tools=$(bash scripts/versions.sh buildTools)
           yes | "$manager" --licenses >/dev/null 2>&1 || true
-          "$manager" "platforms;android-35" "build-tools;35.0.0" >/dev/null
-          echo "sdk=$sdk" >>"$GITHUB_ENV"
-      - run: ./gradlew --no-daemon assembleRelease
+          "$manager" "platforms;android-$api" "build-tools;$build_tools" >/dev/null
+          echo "ANDROID_HOME=$sdk" >>"$GITHUB_ENV"
+      # A checkout with no SDK must fail with the one message that names the fix,
+      # before AGP's generic "SDK location not found". An empty user.home hides
+      # the Termux default the settings script would otherwise find.
+      - name: The first-run failure names the fix
+        run: |
+          empty=$(mktemp -d)
+          set +e
+          output=$(ANDROID_HOME= ANDROID_SDK_ROOT= \
+            ./gradlew --no-daemon -Duser.home="$empty" help 2>&1)
+          status=$?
+          set -e
+          rm -rf "$empty"
+          test "$status" -ne 0
+          printf '%s\n' "$output" | grep -q 'Android SDK not found'
+          printf '%s\n' "$output" | grep -q 'bash scripts/termux-build.sh'
+      - name: Build the AAR
+        run: >-
+          ./gradlew --no-daemon --warning-mode all --configuration-cache
+          checkBuildEnv assembleRelease
+      # The publishing path, without credentials: the AAR, POM, module metadata
+      # and both jars must reach ~/.m2 under the version passed in.
+      - name: Publish to Maven Local
+        run: |
+          ./gradlew --no-daemon --warning-mode all --configuration-cache \
+            publishToMavenLocal -Pversion=0.0.0-ci
+          artifact="$HOME/.m2/repository/io/github/mbanucu/android-accessible-terminal/0.0.0-ci"
+          test -f "$artifact/android-accessible-terminal-0.0.0-ci.aar"
+          test -f "$artifact/android-accessible-terminal-0.0.0-ci.pom"
+          test -f "$artifact/android-accessible-terminal-0.0.0-ci-sources.jar"
+          test -f "$artifact/android-accessible-terminal-0.0.0-ci-javadoc.jar"
+          rm -rf "$artifact"
+      # Signing is a release path too. A throwaway key exercises it without a
+      # repository secret, and the bundle is never uploaded.
+      - name: Sign the bundle with a throwaway key
+        run: |
+          temp_gpg=$(mktemp -d)
+          GNUPGHOME="$temp_gpg" gpg --batch --passphrase '' --quick-generate-key \
+            'CI Smoke <ci@example.invalid>' ed25519 sign 1d
+          export SIGNING_KEY="$(GNUPGHOME="$temp_gpg" gpg --armor --export-secret-keys)"
+          export SIGNING_PASSWORD=''
+          ./gradlew --no-daemon --warning-mode all --configuration-cache \
+            nmcpZipAggregation -PVERSION_NAME=0.0.0-ci-sign
+          unzip -l build/nmcp/zip/aggregation.zip | grep '\.asc$'
+          rm -rf "$temp_gpg"
       # The bundle the release workflow uploads, built without credentials: this
       # catches a missing sources or javadoc jar before a tag does.
-      - run: ./gradlew --no-daemon nmcpZipAggregation
+      - name: Build the release bundle
+        run: >-
+          ./gradlew --no-daemon --warning-mode all --configuration-cache
+          nmcpZipAggregation
+
+  # The build is developed on Termux, so CI has a path for a self-hosted phone
+  # runner without making every PR wait for one. Set the repository variable
+  # TERMUX_RUNNER=true (Settings -> Variables) once a runner labelled
+  # self-hosted, termux is registered. Until then scripts/termux-build.sh is the
+  # documented on-device smoke build.
+  termux:
+    name: termux smoke build
+    if: vars.TERMUX_RUNNER == 'true'
+    runs-on: [self-hosted, termux]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: check the environment and assembleRelease
+        env:
+          OFFLINE: '0'
+        run: bash scripts/termux-build.sh
+      - name: terminal JVM suite
+        run: bash terminal/test.sh
 
   a11y-probe:
     name: build the accessibility probe
@@ -63,9 +140,11 @@ jobs:
         run: |
           sdk="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           manager=$(command -v sdkmanager || echo "$sdk/cmdline-tools/latest/bin/sdkmanager")
+          api=$(bash scripts/versions.sh compileSdk)
+          build_tools=$(bash scripts/versions.sh buildTools)
           yes | "$manager" --licenses >/dev/null 2>&1 || true
-          "$manager" "platforms;android-35" "build-tools;35.0.0" >/dev/null
-          echo "$sdk/build-tools/35.0.0" >>"$GITHUB_PATH"
+          "$manager" "platforms;android-$api" "build-tools;$build_tools" >/dev/null
+          echo "$sdk/build-tools/$build_tools" >>"$GITHUB_PATH"
       # No device and no Gradle: the same build the release workflow attaches to
       # a tag, including the legacy package and both checksums.
       - name: Build

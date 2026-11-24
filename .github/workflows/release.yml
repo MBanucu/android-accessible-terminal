@@ -40,9 +40,11 @@ jobs:
         run: |
           sdk="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           manager=$(command -v sdkmanager || echo "$sdk/cmdline-tools/latest/bin/sdkmanager")
+          api=$(bash scripts/versions.sh compileSdk)
+          build_tools=$(bash scripts/versions.sh buildTools)
           yes | "$manager" --licenses >/dev/null 2>&1 || true
-          "$manager" "platforms;android-35" "build-tools;35.0.0" >/dev/null
-          echo "sdk=$sdk" >>"$GITHUB_ENV"
+          "$manager" "platforms;android-$api" "build-tools;$build_tools" >/dev/null
+          echo "ANDROID_HOME=$sdk" >>"$GITHUB_ENV"
 
       - name: Check the release secrets are present
         env:
@@ -94,11 +96,13 @@ jobs:
         run: |
           sdk="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           manager=$(command -v sdkmanager || echo "$sdk/cmdline-tools/latest/bin/sdkmanager")
+          api=$(bash scripts/versions.sh compileSdk)
+          build_tools=$(bash scripts/versions.sh buildTools)
           yes | "$manager" --licenses >/dev/null 2>&1 || true
-          "$manager" "platforms;android-35" "build-tools;35.0.0" >/dev/null
+          "$manager" "platforms;android-$api" "build-tools;$build_tools" >/dev/null
           # The probe build is the SDK's tools, not Gradle, so they have to be on
           # PATH rather than only installed.
-          echo "$sdk/build-tools/35.0.0" >>"$GITHUB_PATH"
+          echo "$sdk/build-tools/$build_tools" >>"$GITHUB_PATH"
 
       - name: Build the probe
         env:

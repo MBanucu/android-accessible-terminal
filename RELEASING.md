@@ -122,7 +122,10 @@ publish, so a bad release is fixed by tagging forward, not by reusing the number
 
 ## Publishing from a workstation
 
-The same task works locally with the secrets in the environment:
+The same task works locally with the secrets in the environment. The wrapper is
+Gradle 9.9.2 and AGP 9.5.2, both pinned in `gradle/libs.versions.toml`; on
+Termux, resolve the SDK and bionic `aapt2` first with
+`source scripts/termux-env.sh` (see [`docs/termux-build.md`](docs/termux-build.md)).
 
 ```bash
 export MAVEN_CENTRAL_USERNAME=…

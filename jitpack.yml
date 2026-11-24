@@ -1,4 +1,6 @@
-# AGP 8 needs JDK 17, and JitPack's default image is not guaranteed to have it.
+# AGP 9 needs JDK 17, and the Gradle wrapper is 9.9.2; JitPack's default image is
+# not guaranteed to have a suitable JDK. Gradle supplies the rest through the
+# wrapper, and Android SDK setup is JitPack's Android image.
 jdk:
   - openjdk17
 install:

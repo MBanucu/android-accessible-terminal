@@ -168,6 +168,15 @@ and this project adheres to
 
 ### Changed
 
+- The Gradle build starts clean on Termux. AGP 9.5.2 and Gradle 9.9.2 match the
+  sibling projects; `gradle/libs.versions.toml` owns the plugin and SDK versions;
+  `scripts/termux-build.sh` resolves `$HOME/android-sdk` and Termux's bionic
+  `aapt2`; `checkBuildEnv`, `scripts/termux-env.sh` and a settings-level check
+  fail with one actionable message when the SDK is missing. The wrapper pins its
+  distribution SHA-256 and CI validates the wrapper JAR. `assembleRelease`,
+  `publishToMavenLocal` and `nmcpZipAggregation` all run with the configuration
+  cache. See [`docs/termux-build.md`](docs/termux-build.md).
+
 - The tools that drive the device — `adb-connect` (the mDNS lookup for the
   wireless-debugging port), `adb-watch` (the loop that reconnects) and `capture`
   (the recording and the frame for an event) — are their own project,

@@ -54,14 +54,17 @@ Add these under **Settings → Secrets and variables → Actions**:
 | `MAVEN_CENTRAL_USERNAME` | the user token's username |
 | `MAVEN_CENTRAL_PASSWORD` | the user token's password |
 | `SIGNING_KEY` | the contents of `private-key.asc` (armored, whole file) |
-| `SIGNING_PASSWORD` | the key's passphrase, or an empty string if it has none |
+| `SIGNING_PASSWORD` | the key's passphrase; leave the secret unset if the key has none |
 
 ```bash
 gh secret set MAVEN_CENTRAL_USERNAME
 gh secret set MAVEN_CENTRAL_PASSWORD
 gh secret set SIGNING_KEY < private-key.asc
-gh secret set SIGNING_PASSWORD
+gh secret set SIGNING_PASSWORD   # only for a passphrase-protected key
 ```
+
+A GitHub secret cannot hold an empty value, so an unprotected key simply has no
+`SIGNING_PASSWORD` secret; the build signs with an empty passphrase then.
 
 ## Publishing a version
 
@@ -84,8 +87,11 @@ creating another tag:
 gh workflow run release.yml --ref 0.2.0 -f version=0.2.0
 ```
 
-Run it from the tag, not from `main`: the workflow checks out that ref, and the
-version and the code must belong together.
+Run it from the tag, not from `main`: the workflow checks out that ref. The
+version is read from the ref, and a `version` input that disagrees with it fails
+the run before anything is uploaded — otherwise a dispatch from one tag could
+publish that tree under another number, which Central makes permanent. A run
+started from a branch fails for the same reason.
 
 ### The accessibility probe artifact
 
@@ -131,7 +137,7 @@ Termux, resolve the SDK and bionic `aapt2` first with
 export MAVEN_CENTRAL_USERNAME=…
 export MAVEN_CENTRAL_PASSWORD=…
 export SIGNING_KEY="$(cat private-key.asc)"
-export SIGNING_PASSWORD=…
+export SIGNING_PASSWORD=…          # omit for a key without a passphrase
 ./gradlew publishAggregationToCentralPortal -PVERSION_NAME=0.2.0
 ```
 

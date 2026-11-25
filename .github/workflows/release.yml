@@ -4,7 +4,11 @@ name: release
 # accessibility probe APK to the GitHub release. The Maven secrets are a Central
 # Portal user token and a PGP key; see RELEASING.md for how to create them.
 # Publishing a GitHub release starts this; workflow_dispatch exists so a failed
-# run can be retried for the same version.
+# run can be retried for the same version. On a manual run the version and the
+# ref must agree: the checkout uses the ref, so a dispatch from another tag
+# would publish that tree under the requested number, and Central never replaces
+# a version. The job derives the version from the ref and rejects a mismatch
+# before it uploads anything.
 on:
   release:
     types: [published]
@@ -28,6 +32,38 @@ jobs:
           # The artifact is built from the tag being released, not from main.
           # A manual run must be started from the tag too: --ref <tag>.
           ref: ${{ github.event.release.tag_name || github.ref }}
+
+      # Downstream steps build the ref that was checked out, and Central never
+      # replaces a version that did publish, so the ref has to decide the
+      # version. Trusting inputs.version instead let
+      # `--ref 0.2.0 -f version=0.3.0` publish 0.2.0's code under 0.3.0.
+      - name: The ref is the version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if [ -n "$RELEASE_TAG" ]; then
+            version="${RELEASE_TAG#v}"
+          else
+            if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+              echo "::error::a manual run must be started from the tag: --ref <version>"
+              exit 1
+            fi
+            version="${GITHUB_REF_NAME#v}"
+            if [ -n "$INPUT_VERSION" ] && [ "${INPUT_VERSION#v}" != "$version" ]; then
+              echo "::error::version $INPUT_VERSION does not match the checked out ref $GITHUB_REF_NAME"
+              echo "Re-run it from the tag that version names: --ref $version -f version=$version"
+              exit 1
+            fi
+          fi
+          if ! [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$version' is not a version this project publishes"
+            exit 1
+          fi
+          echo "publishing $version from ${GITHUB_SHA:0:12}"
+          echo "VERSION=$version" >>"$GITHUB_ENV"
+          echo "publishing $version" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/setup-java@v4
         with:
@@ -53,11 +89,14 @@ jobs:
           SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
           SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
         run: |
+          # SIGNING_PASSWORD is optional: a key without a passphrase has no value
+          # to store, and a GitHub secret cannot be empty. build.gradle.kts
+          # defaults it to the empty string, which is what an unprotected key
+          # signs with. Requiring it made such a key impossible to release with.
           missing=()
           [ -n "${MAVEN_CENTRAL_USERNAME:-}" ] || missing+=("MAVEN_CENTRAL_USERNAME")
           [ -n "${MAVEN_CENTRAL_PASSWORD:-}" ] || missing+=("MAVEN_CENTRAL_PASSWORD")
           [ -n "${SIGNING_KEY:-}" ] || missing+=("SIGNING_KEY")
-          [ -n "${SIGNING_PASSWORD:-}" ] || missing+=("SIGNING_PASSWORD")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::missing repository secrets: ${missing[*]} - see RELEASING.md"
             exit 1
@@ -71,10 +110,8 @@ jobs:
           SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
         run: |
           set -euo pipefail
-          version="${{ github.event.release.tag_name || inputs.version }}"
-          version="${version#v}"
-          echo "publishing $version"
-          ./gradlew --no-daemon publishAggregationToCentralPortal -PVERSION_NAME="$version"
+          # VERSION comes from the checked out ref, validated above.
+          ./gradlew --no-daemon publishAggregationToCentralPortal -PVERSION_NAME="$VERSION"
 
   a11y-probe:
     name: publish the accessibility probe
